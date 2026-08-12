@@ -694,8 +694,11 @@ begin  -- behavioural
   --**********************************************************************
 
   -- Used to allow MEGA65 to instruct FPGA to start a different bitstream #153
+  -- Not available on targets whose PL is configured by a hard processor system
+  -- rather than from a PL-accessible configuration flash (e.g. Zynq
+  -- UltraScale+ carriers such as the KV260), and ICAPE2 is 7-series only.
   reconfig:
-  if target /= simulation generate
+  if target /= simulation and target /= kv260 generate
     reconfig1:
     entity work.reconfig
       port map ( clock => clock,

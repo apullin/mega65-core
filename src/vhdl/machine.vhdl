@@ -208,6 +208,12 @@ entity machine is
          keyup : in std_logic;
          keyboard_column8 : out std_logic := '1';
          caps_lock_key : in std_logic;
+         -- Remote synthetic keyboard (e.g. AXI-injected on the KV260, which has
+         -- no keyboard pins). MEGA65 matrix positions 0..71, >71 = no key.
+         -- Default 0xFF so every other target is unaffected.
+         remote_key1 : in unsigned(7 downto 0) := x"FF";
+         remote_key2 : in unsigned(7 downto 0) := x"FF";
+         remote_key3 : in unsigned(7 downto 0) := x"FF";
          fa_left : in std_logic;
          fa_right : in std_logic;
          fa_up : in std_logic;
@@ -1723,6 +1729,9 @@ begin
       osk_key4 => osk_key4,
       touch_key1 => osk_touch1_key,
       touch_key2 => osk_touch2_key,
+      remote_key1 => remote_key1,
+      remote_key2 => remote_key2,
+      remote_key3 => remote_key3,
 
       uart_char => uart_char,
       uart_char_valid => uart_char_valid,

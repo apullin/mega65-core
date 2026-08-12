@@ -12,6 +12,7 @@ package cputypes is
     megaphoner1, megaphoner4,
     nexys4, nexys4ddr, nexys4ddr_widget,
     qmtecha100t, qmtecha200t, qmtechk325t,
+    kv260,
     wukong
     );
   

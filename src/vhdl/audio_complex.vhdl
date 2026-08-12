@@ -27,7 +27,10 @@ use work.debugtools.all;
 use work.cputypes.all;
 
 entity audio_complex is
-  generic ( clock_frequency : integer );
+  generic ( clock_frequency : integer;
+            -- Needed to decide what mixer source #14 carries; see the
+            -- source14_in assignment below.
+            target : mega65_target_t := simulation );
   port (    
     cpuclock : in std_logic;
 
@@ -147,6 +150,10 @@ architecture elizabethan of audio_complex is
   signal mic_do_sample_right : std_logic := '0';
   signal mic_divider : unsigned(7 downto 0) := "00000000";
   signal headphone_mic_left : signed(15 downto 0) := to_signed(0,16);
+
+  -- Mixer source #14: the headphone microphone on MEGAphone, the FM
+  -- synthesiser's left channel everywhere else. See the sources() map below.
+  signal source14_in : signed(15 downto 0) := to_signed(0,16);
   signal mems_mic0_left : signed(15 downto 0) := to_signed(0,16);
   signal mems_mic0_right : signed(15 downto 0) := to_signed(0,16);
   signal mems_mic1_left : signed(15 downto 0) := to_signed(0,16);
@@ -221,8 +228,15 @@ architecture elizabethan of audio_complex is
   
 begin
 
+  -- Mixer source #14 selection. Only MEGAphone has a headphone microphone; on
+  -- every other target that input idles at '1' and decodes to a DC offset, so
+  -- slot #14 is given to the FM synthesiser's left channel instead -- which is
+  -- what audio_mixer's shared-coefficient hack for #14/#15 was written for.
+  source14_in <= headphone_mic_left when (target = megaphoner1 or target = megaphoner4)
+                 else fm_left;
+
   -- PCM master clock interface for modems
-  pcmclock0: entity work.pcm_clock 
+  pcmclock0: entity work.pcm_clock
     generic map (
       -- Modems and some other peripherals only use 8KHz
       clock_frequency => clock_frequency,
@@ -406,9 +420,18 @@ begin
     sources(11) => mems_mic0_right,
     sources(12) => mems_mic1_left,
     sources(13) => mems_mic1_right,
-    sources(14) => headphone_mic_left, -- headphone jack input on megaphone
-    sources(15) => fm_right, -- #15 can't be used, as shadowed by master volume
-                             -- (gain is controlled by source 14)
+    -- Sources #14 and #15 are the FM stereo pair. audio_mixer deliberately gives
+    -- them a shared volume coefficient (source 14's) -- see the "A bit of a hack
+    -- to allow 16 inputs ... used for the OPL2 FM synthesiser" comment in its
+    -- state machine. So one coefficient controls FM level for both channels.
+    --
+    -- Only the MEGAphone targets have a headphone microphone; every other board
+    -- leaves the headphone_mic input at its default '1', which the PDM decoder
+    -- turns into a constant DC offset sitting in slot #14. So on those boards
+    -- #14 carries fm_left, which is what the mixer was designed for and what
+    -- makes FM audio actually reach the output.
+    sources(14) => source14_in,
+    sources(15) => fm_right,
 
     -- Audio outputs for on-board speakers, line-out etc
     outputs(0) => spkr_left,      -- also used for HDMI out on M65R2

@@ -130,6 +130,13 @@ entity iomapper is
         touch_key1 : in unsigned(7 downto 0);
         touch_key2 : in unsigned(7 downto 0);
 
+        -- Remote (e.g. AXI-injected) synthetic keyboard. Each is a MEGA65 matrix
+        -- position 0..71, or >71 (0xFF) for "no key". Muxed with the CPU's own
+        -- synthetic-keypress registers below, so it only acts when those are idle.
+        remote_key1 : in unsigned(7 downto 0) := x"FF";
+        remote_key2 : in unsigned(7 downto 0) := x"FF";
+        remote_key3 : in unsigned(7 downto 0) := x"FF";
+
         reg_isr_out : out unsigned(7 downto 0);
         imask_ta_out : out std_logic;
 
@@ -564,6 +571,14 @@ architecture behavioral of iomapper is
   signal virtual_key1 : std_logic_vector(7 downto 0);
   signal virtual_key2 : std_logic_vector(7 downto 0);
   signal virtual_key3 : std_logic_vector(7 downto 0);
+
+  -- Keys actually fed to keyboard_complex: the CPU's synthetic-keypress
+  -- registers take priority; when a slot is idle (>71) the remote/AXI keyboard
+  -- drives it. Plain concurrent selects (below) rather than a VHDL-2008
+  -- conditional expression in the port map.
+  signal kc_key1 : unsigned(7 downto 0);
+  signal kc_key2 : unsigned(7 downto 0);
+  signal kc_key3 : unsigned(7 downto 0);
 
   signal keyboard_scan_mode : std_logic_vector(1 downto 0) := "11";
   signal keyboard_scan_rate : unsigned(7 downto 0);
@@ -1030,6 +1045,11 @@ begin
       );
   end block;
 
+  -- CPU synthetic-keypress registers win; remote/AXI keyboard fills idle slots.
+  kc_key1 <= remote_key1 when unsigned(virtual_key1) > 71 else unsigned(virtual_key1);
+  kc_key2 <= remote_key2 when unsigned(virtual_key2) > 71 else unsigned(virtual_key2);
+  kc_key3 <= remote_key3 when unsigned(virtual_key3) > 71 else unsigned(virtual_key3);
+
   block5: block
   begin
     kc0 : entity work.keyboard_complex
@@ -1066,9 +1086,9 @@ begin
     key_left => key_left,
     key_up => key_up,
 
-    key1 => unsigned(virtual_key1),
-    key2 => unsigned(virtual_key2),
-    key3 => unsigned(virtual_key3),
+    key1 => kc_key1,
+    key2 => kc_key2,
+    key3 => kc_key3,
 
     touch_key1 => touch_key1_driver,
     touch_key2 => touch_key2_driver,
@@ -1267,7 +1287,8 @@ begin
     );
 
   audio0: entity work.audio_complex
-    generic map ( clock_frequency => cpu_frequency )
+    generic map ( clock_frequency => cpu_frequency,
+                  target => target )
     port map (
     cpuclock => cpuclock,
 

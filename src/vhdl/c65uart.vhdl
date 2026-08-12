@@ -349,6 +349,8 @@ begin  -- behavioural
       when qmtecha100t => target_id <= x"60";
       when qmtecha200t => target_id <= x"61";
       when qmtechk325t => target_id <= x"62";
+      -- $70-$7F = AMD/Xilinx Zynq UltraScale+ SOM carriers
+      when kv260 => target_id <= x"70";
       -- Misc other targets, that don't have common properties
       when wukong => target_id <= x"FD";
       when simulation => target_id <= x"FE";
