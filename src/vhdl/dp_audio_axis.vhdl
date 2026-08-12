@@ -26,26 +26,46 @@
 --                            20-bit sample within the 32-bit beat.
 --                            4  => 24-bit sample sitting in tdata[23:0]
 --                            12 => 24-bit sample sitting in tdata[31:8]
---   0x04  RW  DIV    frame rate divisor; frame rate = aclk / (DIV+1).
---                    Default 2082 => 100 MHz / 2083 = 48.008 kHz (+0.016%).
+--   0x04  RW  DIV    frame rate divisor; frame rate = aud_clk / (DIV+1).
+--                    Default 504 => 24.242 MHz / 505 = 47.994 kHz (-0.012%).
 --   0x08  R   MAGIC  0x4D363541 ("M65A") for probing
 --   0x0C  R   STAT   [15:0]  frames sent (wraps)
 --                    [31:16] beats the sink was not ready for (backpressure)
 --
--- Clocking: the AXI-Lite slave and the stream both run on aclk (pl_clk0), so
--- dp_s_axis_audio_clk is driven from pl_clk0 too.  That deliberately avoids
--- depending on dp_audio_ref_clk, whose rate is another thing I would have had
--- to assume.  Only the core's audio crosses domains, via the handshake below.
+-- CLOCKING -- and a mistake worth recording.
+--
+-- The first version ran the stream on pl_clk0 (100 MHz) to avoid depending on
+-- dp_audio_ref_clk, whose rate I did not know.  That is not allowed: the PS8
+-- pin DPSAXISAUDIOCLK has a minimum period of 40 ns, so 25 MHz is a hard
+-- ceiling, and the build reported "Min Period ... Required 40.000 Actual
+-- 10.000, slack -30.000".  Avoiding an unknown by inventing a constraint of my
+-- own was the wrong trade.
+--
+-- So the stream now runs on dp_audio_ref_clk (24.242 MHz here), which is what
+-- that output exists for, buffered onto a global clock and handed back to the
+-- PS so both ends of the stream share one clock.  The AXI-Lite registers stay
+-- on pl_clk0 because that is the interconnect's clock; the handful of config
+-- values cross into the audio domain, and they only change when a human pokes
+-- them.
 --------------------------------------------------------------------------------
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use ieee.numeric_std.all;
 
+library UNISIM;
+use UNISIM.vcomponents.all;
+
 entity dp_audio_axis is
   port (
-    -- AXI4-Lite control, and the stream clock
-    aclk    : in  std_logic;
-    aresetn : in  std_logic;
+    -- AXI4-Lite control, on the interconnect's clock
+    s_axi_aclk    : in  std_logic;
+    s_axi_aresetn : in  std_logic;
+
+    -- dp_audio_ref_clk straight from the PS, and the same clock after a global
+    -- buffer.  aud_clk_out goes back to the PS as dp_s_axis_audio_clk so the
+    -- stream master and slave are genuinely the same clock.
+    aud_clk_in  : in  std_logic;
+    aud_clk_out : out std_logic;
 
     s_axi_awaddr  : in  std_logic_vector(3 downto 0);
     s_axi_awvalid : in  std_logic;
@@ -81,16 +101,34 @@ end dp_audio_axis;
 
 architecture rtl of dp_audio_axis is
 
-  -- 100 MHz / (2082+1) = 48.008 kHz.  Close enough that no sink cares, and the
-  -- register lets us retune without rebuilding if it turns out to matter.
-  constant DIV_DEFAULT : natural := 2082;
+  -- 24.242 MHz / (504+1) = 47.994 kHz, 0.012% low.  No sink cares about that,
+  -- and DIV is a register so it can be retuned without rebuilding.
+  constant DIV_DEFAULT : natural := 504;
+
+  signal aud_clk : std_logic;
+
+  -- Config values as seen in the audio domain.  They are written by a human
+  -- via AXI and then sit still, so a two-flop sync per bit is honest here:
+  -- there is no instant at which a coherent multi-bit update matters.
+  signal ctrl_meta : std_logic_vector(7 downto 0) := x"40";
+  signal ctrl_aud  : std_logic_vector(7 downto 0) := x"40";
+  signal div_meta  : unsigned(15 downto 0) := to_unsigned(DIV_DEFAULT, 16);
+  signal div_aud   : unsigned(15 downto 0) := to_unsigned(DIV_DEFAULT, 16);
+
+  -- Diagnostic counters travelling the other way.  Approximate by construction:
+  -- they may read torn if sampled mid-increment, which for a frame counter
+  -- ticking at 48 kHz is not worth a handshake.
+  signal frames_meta : unsigned(15 downto 0) := (others => '0');
+  signal frames_sync : unsigned(15 downto 0) := (others => '0');
+  signal stalls_meta : unsigned(15 downto 0) := (others => '0');
+  signal stalls_sync : unsigned(15 downto 0) := (others => '0');
 
   signal ctrl_reg : std_logic_vector(7 downto 0) := (others => '0');
   signal div_reg  : unsigned(15 downto 0) := to_unsigned(DIV_DEFAULT, 16);
 
-  alias  en_bit    : std_logic is ctrl_reg(0);
-  alias  swap_bit  : std_logic is ctrl_reg(1);
-  alias  mute_bit  : std_logic is ctrl_reg(2);
+  alias  en_bit    : std_logic is ctrl_aud(0);
+  alias  swap_bit  : std_logic is ctrl_aud(1);
+  alias  mute_bit  : std_logic is ctrl_aud(2);
   signal shift_amt : integer range 0 to 15 := 4;
 
   signal awready_i : std_logic := '0';
@@ -163,7 +201,31 @@ begin
   m_axis_tdata  <= tdata_i;
   m_axis_tid(0) <= tid_i;
 
-  shift_amt <= to_integer(unsigned(ctrl_reg(7 downto 4)));
+  shift_amt <= to_integer(unsigned(ctrl_aud(7 downto 4)));
+
+  -- dp_audio_ref_clk arrives unbuffered; put it on a global buffer before it
+  -- clocks anything, and hand the buffered version back to the PS.
+  bufg_aud : BUFG port map (I => aud_clk_in, O => aud_clk);
+  aud_clk_out <= aud_clk;
+
+  ------------------------------------------------------------------------------
+  -- Config into the audio domain, counters back out.
+  ------------------------------------------------------------------------------
+  process (aud_clk)
+  begin
+    if rising_edge(aud_clk) then
+      ctrl_meta <= ctrl_reg;  ctrl_aud <= ctrl_meta;
+      div_meta  <= div_reg;   div_aud  <= div_meta;
+    end if;
+  end process;
+
+  process (s_axi_aclk)
+  begin
+    if rising_edge(s_axi_aclk) then
+      frames_meta <= frames;  frames_sync <= frames_meta;
+      stalls_meta <= stalls;  stalls_sync <= stalls_meta;
+    end if;
+  end process;
 
   ------------------------------------------------------------------------------
   -- Core clock domain: capture a coherent stereo pair when asked.
@@ -183,10 +245,10 @@ begin
   ------------------------------------------------------------------------------
   -- Stream clock domain: rate strobe, handshake, and the AXI4-Stream master.
   ------------------------------------------------------------------------------
-  process (aclk)
+  process (aud_clk)
   begin
-    if rising_edge(aclk) then
-      if aresetn = '0' then
+    if rising_edge(aud_clk) then
+      if s_axi_aresetn = '0' then
         rate_cnt <= (others => '0');
         frame_go <= '0';
         tx_state <= TX_IDLE;
@@ -197,7 +259,7 @@ begin
       else
         -- sample rate strobe
         frame_go <= '0';
-        if rate_cnt >= div_reg then
+        if rate_cnt >= div_aud then
           rate_cnt <= (others => '0');
           frame_go <= '1';
         else
@@ -253,11 +315,11 @@ begin
   ------------------------------------------------------------------------------
   -- AXI4-Lite register file
   ------------------------------------------------------------------------------
-  process (aclk)
+  process (s_axi_aclk)
     variable do_write : boolean;
   begin
-    if rising_edge(aclk) then
-      if aresetn = '0' then
+    if rising_edge(s_axi_aclk) then
+      if s_axi_aresetn = '0' then
         ctrl_reg  <= (others => '0');
         ctrl_reg(7 downto 4) <= x"4";     -- default: 24-bit sample in [23:0]
         div_reg   <= to_unsigned(DIV_DEFAULT, 16);
@@ -299,8 +361,8 @@ begin
             when "00"   => rdata_i <= x"000000" & ctrl_reg;
             when "01"   => rdata_i <= x"0000" & std_logic_vector(div_reg);
             when "10"   => rdata_i <= x"4D363541";                  -- "M65A"
-            when others => rdata_i <= std_logic_vector(stalls) &
-                                      std_logic_vector(frames);
+            when others => rdata_i <= std_logic_vector(stalls_sync) &
+                                      std_logic_vector(frames_sync);
           end case;
           rvalid_i <= '1';
         else

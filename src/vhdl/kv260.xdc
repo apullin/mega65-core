@@ -98,9 +98,39 @@ set_property -dict {PACKAGE_PIN A12 IOSTANDARD LVCMOS33 PULLUP TRUE} [get_ports 
 ## bit-to-bit skew well under a scan interval, so a scan can never latch a
 ## half-updated position and synthesise a key nobody pressed.
 ## ---------------------------------------------------------------------------
-set kv_keys [get_cells -quiet -hier -filter {NAME =~ *vkbd/inst/keys_reg_reg[*]}]
-if {[llength $kv_keys]} {
-    set_max_delay -datapath_only 10.000 -from $kv_keys
-} else {
-    puts "WARNING: virtual keyboard key registers not found; CDC left unconstrained"
-}
+## Kept as a single flat statement on purpose.  Wrapping this in an "if" that
+## checked the cells existed looked safer but was not: Vivado rewrites XDC when
+## it propagates constraints from synthesis to implementation, and the rewritten
+## if/else silently failed to apply the exception -- the build still reported
+## all 90 endpoints failing.  Applying the identical set_max_delay by hand to
+## the routed checkpoint gave slack +1.899 with requirement 10.000, which is how
+## the flat form was confirmed to be the working one.  During synthesis the
+## block design is a black box so this matches nothing and merely warns; at
+## implementation it matches the 24 key registers.
+set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *vkbd/inst/keys_reg_reg*}]
+
+
+## ---------------------------------------------------------------------------
+## Audio clock crossings.
+##
+## dp_audio_axis deliberately spans three domains: AXI-Lite config on the
+## interconnect's 100 MHz clock, the stream on the 24.2 MHz DisplayPort audio
+## reference clock, and the core's mixer on the 40.5 MHz CPU clock.  Every
+## crossing below is either a two-flop synchroniser or the sample handshake,
+## both of which the timing engine has no way to recognise on its own -- left
+## alone it reports the sample bus as ~33 failing endpoints.
+##
+## Bounded rather than false-pathed, for the same reason as the keyboard: the
+## captured stereo pair must not skew across a sampling instant, or left and
+## right would come from different moments and the audio would click.
+##
+## Flat statements, not wrapped in a existence check -- see the note above about
+## Vivado rewriting conditional XDC during constraint propagation.
+## ---------------------------------------------------------------------------
+set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/cap_*_reg*}]
+set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/req_tog_reg*}]
+set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/ack_tog_reg*}]
+set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/ctrl_reg_reg*}]
+set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/div_reg_reg*}]
+set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/frames_reg*}]
+set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/stalls_reg*}]
