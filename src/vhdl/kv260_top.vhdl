@@ -50,6 +50,9 @@ architecture Behavioral of kv260_top is
       dp_live_video_in_pixel1 : in  std_logic_vector(35 downto 0);
       dp_live_video_in_vsync  : in  std_logic;
       dp_video_in_clk         : in  std_logic;
+      audio_clk               : in  std_logic;
+      audio_left              : in  std_logic_vector(19 downto 0);
+      audio_right             : in  std_logic_vector(19 downto 0);
       mon_uart_tx             : out std_logic;
       mon_uart_rx             : in  std_logic;
       vkbd_key1               : out std_logic_vector(7 downto 0);
@@ -79,6 +82,12 @@ architecture Behavioral of kv260_top is
   signal dp_live_video_in_vsync  : std_logic;
   signal dp_live_video_in_de     : std_logic;
 
+  -- Mixer output on its way to the DisplayPort live-audio input.  This board
+  -- has no audio hardware, so sound rides out on the same cable as the picture.
+  signal audio_clk   : std_logic;
+  signal audio_left  : std_logic_vector(19 downto 0);
+  signal audio_right : std_logic_vector(19 downto 0);
+
   -- CIA1 keyboard matrix: no pins available on this carrier.
   signal porta_pins : std_logic_vector(7 downto 0);
   signal portb_pins : std_logic_vector(7 downto 0);
@@ -92,6 +101,9 @@ begin
       dp_live_video_in_hsync  => dp_live_video_in_hsync,
       dp_live_video_in_vsync  => dp_live_video_in_vsync,
       dp_live_video_in_de     => dp_live_video_in_de,
+      audio_clk               => audio_clk,
+      audio_left              => audio_left,
+      audio_right             => audio_right,
       mon_uart_tx             => mon_uart_tx,
       mon_uart_rx             => mon_uart_rx,
       vkbd_key1               => vkbd_key1,
@@ -123,6 +135,10 @@ begin
       dp_live_video_in_hsync  => dp_live_video_in_hsync,
       dp_live_video_in_vsync  => dp_live_video_in_vsync,
       dp_live_video_in_de     => dp_live_video_in_de,
+
+      audio_clk   => audio_clk,
+      audio_left  => audio_left,
+      audio_right => audio_right,
 
       restore_key => restore_key,
       vkbd_key1   => unsigned(vkbd_key1),

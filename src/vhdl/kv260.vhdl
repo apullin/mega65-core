@@ -69,6 +69,19 @@ entity container is
     dp_live_video_in_de     : out std_logic;
 
     ------------------------------------------------------------------------
+    -- Audio, for the DisplayPort live-audio input.
+    --
+    -- This carrier has no audio hardware: ampPWM_l/r go to PMOD pins with
+    -- nothing on them.  So sound leaves the same way the picture does,
+    -- embedded in the DisplayPort stream.  These are the mixer's raw 20-bit
+    -- samples in the cpuclock domain; dp_audio_axis does the clock crossing
+    -- and the AXI4-Stream framing.
+    ------------------------------------------------------------------------
+    audio_clk   : out std_logic;
+    audio_left  : out std_logic_vector(19 downto 0);
+    audio_right : out std_logic_vector(19 downto 0);
+
+    ------------------------------------------------------------------------
     -- Keyboard (CIA1 matrix).  Destined for a PMOD-attached keyboard or a
     -- PS-side USB HID bridge; exported for now.
     ------------------------------------------------------------------------
@@ -133,9 +146,10 @@ architecture Behavioral of container is
   signal portb_charge_pins : std_logic;
   signal portb_pins_in     : std_logic_vector(7 downto 0);
 
-  -- Audio.
-  signal audio_left  : std_logic_vector(19 downto 0);
-  signal audio_right : std_logic_vector(19 downto 0);
+  -- Audio.  The internal names carry the mixer output; the like-named output
+  -- ports are driven from them, since an "out" port cannot be read back.
+  signal audio_left_i  : std_logic_vector(19 downto 0);
+  signal audio_right_i : std_logic_vector(19 downto 0);
 
   -- OPL2/3 FM synthesiser output, from slow_devices into the audio mixer.
   -- The wukong target this file descends from leaves these unconnected, which
@@ -317,8 +331,8 @@ begin
       qspidb_oe  => qspi_db_oe,
 
       -- Audio.
-      audio_left  => audio_left,
-      audio_right => audio_right,
+      audio_left  => audio_left_i,
+      audio_right => audio_right_i,
       ampPWM_l    => pwm_l,
       ampPWM_r    => pwm_r,
       fm_left     => fm_left,
@@ -447,6 +461,10 @@ begin
   -- syncs and a data-enable, on the 27 MHz pixel clock.  No TMDS encoding and
   -- no serialisation happens on this board.
   ----------------------------------------------------------------------------
+  audio_clk   <= cpuclock;
+  audio_left  <= audio_left_i;
+  audio_right <= audio_right_i;
+
   dp_video_in_clk        <= clock27;
   dp_live_video_in_hsync <= v_hdmi_hsync;
   dp_live_video_in_vsync <= v_vsync;
