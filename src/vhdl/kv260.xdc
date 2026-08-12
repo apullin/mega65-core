@@ -82,3 +82,25 @@ set_property -dict {PACKAGE_PIN A12 IOSTANDARD LVCMOS33 PULLUP TRUE} [get_ports 
 ## See kv260_ps_bd.tcl.  dp_video_in_clk is generated in the PL (27 MHz) and is
 ## an input TO the PS.
 ## ---------------------------------------------------------------------------
+
+## ---------------------------------------------------------------------------
+## Remote keyboard clock crossing.
+##
+## The virtual keyboard's three "currently pressed" matrix positions are written
+## by the PS on the 100 MHz AXI clock and read by the core on its 40.5 MHz
+## clock, with no synchroniser.  That is deliberate: a key is held down for tens
+## of milliseconds while the core rescans the matrix at 1 kHz, so the value is
+## quasi-static and a setup check against a specific 40.5 MHz edge means
+## nothing.  Left unconstrained the tool reports ~90 failing endpoints here and
+## nowhere else, which buries any real violation.
+##
+## Bound the datapath rather than declaring a false path: that still holds
+## bit-to-bit skew well under a scan interval, so a scan can never latch a
+## half-updated position and synthesise a key nobody pressed.
+## ---------------------------------------------------------------------------
+set kv_keys [get_cells -quiet -hier -filter {NAME =~ *vkbd/inst/keys_reg_reg[*]}]
+if {[llength $kv_keys]} {
+    set_max_delay -datapath_only 10.000 -from $kv_keys
+} else {
+    puts "WARNING: virtual keyboard key registers not found; CDC left unconstrained"
+}
