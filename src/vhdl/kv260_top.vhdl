@@ -55,6 +55,7 @@ architecture Behavioral of kv260_top is
       audio_right             : in  std_logic_vector(19 downto 0);
       mon_uart_tx             : out std_logic;
       mon_uart_rx             : in  std_logic;
+      axi_virt_f011           : out std_logic_vector(1 downto 0);
       vkbd_key1               : out std_logic_vector(7 downto 0);
       vkbd_key2               : out std_logic_vector(7 downto 0);
       vkbd_key3               : out std_logic_vector(7 downto 0);
@@ -64,6 +65,9 @@ architecture Behavioral of kv260_top is
   end component;
 
   -- Remote keyboard bytes from the PS-driven virtual_keyboard_axi slave.
+  -- F011 virtualisation asserted from Linux, via the f011_ctrl_axi slave.
+  signal axi_virt_f011 : std_logic_vector(1 downto 0);
+
   signal vkbd_key1 : std_logic_vector(7 downto 0);
   signal vkbd_key2 : std_logic_vector(7 downto 0);
   signal vkbd_key3 : std_logic_vector(7 downto 0);
@@ -106,6 +110,7 @@ begin
       audio_right             => audio_right,
       mon_uart_tx             => mon_uart_tx,
       mon_uart_rx             => mon_uart_rx,
+      axi_virt_f011           => axi_virt_f011,
       vkbd_key1               => vkbd_key1,
       vkbd_key2               => vkbd_key2,
       vkbd_key3               => vkbd_key3,
@@ -141,6 +146,7 @@ begin
       audio_right => audio_right,
 
       restore_key => restore_key,
+      axi_virt_f011 => axi_virt_f011,
       vkbd_key1   => unsigned(vkbd_key1),
       vkbd_key2   => unsigned(vkbd_key2),
       vkbd_key3   => unsigned(vkbd_key3),

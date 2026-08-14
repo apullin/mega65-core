@@ -211,6 +211,12 @@ entity machine is
          -- Remote synthetic keyboard (e.g. AXI-injected on the KV260, which has
          -- no keyboard pins). MEGA65 matrix positions 0..71, >71 = no key.
          -- Default 0xFF so every other target is unaffected.
+         -- F011 virtualisation asserted from outside the CPU (KV260: from
+         -- Linux over AXI).  OR-ed with the hypervisor's own bits, so $D659
+         -- keeps working exactly as before and this can only add.
+         axi_virt_f011 : in std_logic_vector(1 downto 0) := "00";
+         axi_d64_f011  : in std_logic_vector(1 downto 0) := "00";
+
          remote_key1 : in unsigned(7 downto 0) := x"FF";
          remote_key2 : in unsigned(7 downto 0) := x"FF";
          remote_key3 : in unsigned(7 downto 0) := x"FF";
@@ -720,6 +726,8 @@ architecture Behavioral of machine is
   signal uart_rx_buffer : std_logic;
   signal protected_hardware_sig : unsigned(7 downto 0);
   signal virtualised_hardware_sig : unsigned(7 downto 0);
+  -- The CPU's own virtualisation flags, plus anything asserted over AXI.
+  signal virtualised_hardware_ored : unsigned(7 downto 0);
   signal chipselect_enables : std_logic_vector(7 downto 0);
 
   -- Matrix Mode signals
@@ -1631,6 +1639,12 @@ begin
       potb_y => potb_y
       );
 
+  -- Either source can turn virtualisation on; neither can turn it off behind
+  -- the other's back.
+  virtualised_hardware_ored <= virtualised_hardware_sig
+                               or ("000000" & unsigned(axi_virt_f011));
+
+
   iomapper0: entity work.iomapper
     generic map ( target => target,
                   cpu_frequency => cpu_frequency,
@@ -1645,7 +1659,7 @@ begin
       pal_mode => pal50_select,
       cpu_slow => cpu_slow,
       protected_hardware_in => protected_hardware_sig,
-      virtualised_hardware_in => virtualised_hardware_sig,
+      virtualised_hardware_in => virtualised_hardware_ored,
       chipselect_enables => chipselect_enables,
       matrix_mode_trap => matrix_trap,
       eth_load_enable => eth_load_enable,

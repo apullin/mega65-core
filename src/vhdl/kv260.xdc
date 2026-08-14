@@ -113,15 +113,24 @@ set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME 
 ## ---------------------------------------------------------------------------
 ## The DisplayPort audio reference clock.
 ##
-## dp_audio_ref_clk comes out of the PS and clocks the audio stream master, but
-## the tool has no way to know its period, so without this the whole audio
-## domain is simply *not analysed* -- which reads as "0 failing endpoints" and
-## is not the same thing as passing.  Measured on the board it is 24,575,995 Hz,
-## i.e. 24.576 MHz, the canonical 512 x 48000 audio master clock.  (Vivado's
-## board preset claims 24.242 MHz for this output; the driver reprograms it, so
-## the hardware is the authority.)
+## dp_audio_ref_clk clocks the audio stream master.  Without a create_clock the
+## whole domain is simply *not analysed*, which reports as "0 failing
+## endpoints" and is not the same as passing.
+##
+## Target the PS8 primitive pin, not the BUFG inside dp_audio_axis: at
+## implementation the block design is flattened, and the BUFG did not match the
+## hierarchical name first guessed, so the constraint silently applied to
+## nothing.  The pin is DPAUDIOREFCLK (not DPAUDREFCLK, which also matches
+## nothing).  Both mistakes were caught by counting matches against the routed
+## checkpoint before rebuilding -- worth doing for any -quiet pattern, since a
+## constraint that matches zero objects fails silently and looks like it
+## applied.
+##
+## 24,575,995 Hz measured on the board (the canonical 512 x 48000 audio master
+## clock), not the 24.242 MHz the board preset claims: the driver reprograms it,
+## so the hardware is the authority.
 create_clock -period 40.690 -name dp_audio_ref_clk \
-    [get_pins -quiet -hier -filter {NAME =~ *dpaud/inst/bufg_aud/O}]
+    [get_pins -quiet -hier -filter {NAME =~ *PS8_i/DPAUDIOREFCLK}]
 
 ## Audio clock crossings.
 ##
@@ -146,3 +155,13 @@ set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME 
 set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/div_reg_reg*}]
 set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/frames_reg*}]
 set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/stalls_reg*}]
+
+## F011 control: same quasi-static crossing as the keyboard and audio blocks.
+## Config bits are written by a human and then sit still, so bounding the
+## datapath is honest; leaving them unconstrained cost 2 failing endpoints in
+## v9, which were the only ones in the whole design.
+set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *f011ctl/inst/ctrl_reg_reg*}]
+## chg_tog currently matches nothing: disk_changed is not yet wired into the
+## core (that needs plumbing through iomapper into sdcardio), so the toggle
+## logic is trimmed.  The constraint is kept for when it is connected.
+set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *f011ctl/inst/chg_tog_reg*}]

@@ -92,6 +92,10 @@ entity container is
     -- Remote keyboard, injected from the PS over AXI (this board has no keyboard
     -- pins). Driven by the virtual_keyboard_axi slave in the block design, via
     -- kv260_top. MEGA65 matrix positions 0..71, 0xFF = no key.
+    -- F011 virtualisation, asserted from Linux over AXI.  See
+    -- f011_ctrl_axi.vhdl for why this exists rather than going through $D659.
+    axi_virt_f011 : in std_logic_vector(1 downto 0) := "00";
+
     vkbd_key1 : in unsigned(7 downto 0) := x"FF";
     vkbd_key2 : in unsigned(7 downto 0) := x"FF";
     vkbd_key3 : in unsigned(7 downto 0) := x"FF";
@@ -303,6 +307,7 @@ begin
       hyper_installed => false
     )
     port map (
+      axi_virt_f011 => axi_virt_f011,
       pixelclock           => pixelclock,
       cpuclock             => cpuclock,
       uartclock            => cpuclock,
