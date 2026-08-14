@@ -124,7 +124,14 @@ architecture rtl of expansionram_axi is
   signal wr_byte   : std_logic_vector(7 downto 0) := (others => '0');
 
   signal toggle_i  : std_logic := '0';
-  signal busy_i    : std_logic := '1';
+  -- Starts READY, not busy.  Starting busy deadlocks: the core-side process
+  -- only accepts a request while not busy, and only clears busy on an ack --
+  -- so with no first request there is never an ack, and busy stays high
+  -- forever.  The symptom is every attic address reading back the same
+  -- constant and writes doing nothing, because no transaction ever completes.
+  -- Unlike a real DRAM there is nothing to initialise here: the FSBL brought
+  -- the controller up long before the PL was loaded.
+  signal busy_i    : std_logic := '0';
 
 
 begin
