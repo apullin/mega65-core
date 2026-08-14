@@ -313,7 +313,7 @@ begin
   -- for why this does not make the machine depend on Linux.
   atticram0 : entity work.expansionram_axi
     generic map (
-      BASE_ADDR => x"70000000",    -- must be reserved from Linux
+      BASE_ADDR => x"78000000",    -- must be reserved from Linux
       ADDR_BITS => 23              -- 8 MB
     )
     port map (

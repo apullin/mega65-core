@@ -44,9 +44,13 @@ use ieee.numeric_std.all;
 
 entity expansionram_axi is
   generic (
-    -- Where the 8 MB window sits in PS DDR.  Must match whatever Linux is told
-    -- to keep its hands off.
-    BASE_ADDR : unsigned(31 downto 0) := x"70000000";
+    -- Where the 8 MB window sits in PS DDR.  Must match the reserved-memory
+    -- node Linux is given (see tools/user-override.dtb and HANDOVER.md).
+    --
+    -- Deliberately NOT 0x70000000: U-Boot loads user-override.dtb to exactly
+    -- that address, and marking it no-map is asking the kernel to treat the
+    -- memory holding its own device tree as absent.
+    BASE_ADDR : unsigned(31 downto 0) := x"78000000";
     -- 8 MB of attic RAM; addresses above this wrap, as on real hardware.
     ADDR_BITS : integer := 23
   );
