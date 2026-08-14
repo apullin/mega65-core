@@ -7,6 +7,20 @@
 -- TV.  The PS exposes that as an AXI4-Stream slave (dp_s_axis_audio_*), and
 -- this block is the stream master feeding it.
 --
+-- HOW THE PS SIDE HAS TO BE SEQUENCED
+--
+-- The DisplayPort audio engine only runs while ALSA has a PCM stream open.
+-- With no stream the engine is down, m_axis_tready never asserts, and this
+-- block stalls forever -- which looks exactly like a broken stream master and
+-- cost a long time to diagnose.  So the PS must:
+--
+--   1. hold a stream open on the *other* PCM device (hw:0,1), which keeps the
+--      engine alive without contending for the live path, and
+--   2. only then point AV_BUF_OUTPUT.AUD1 at the live input.
+--
+-- Done in that order, live video and live audio coexist happily.  Done the
+-- other way round the engine never starts.  See tools/m65audio.sh.
+--
 -- WHY THE FORMAT IS A RUNTIME REGISTER AND NOT A CONSTANT
 --
 -- How a sample must be justified inside the 32-bit beat, and what tid means,
@@ -27,7 +41,7 @@
 --                            4  => 24-bit sample sitting in tdata[23:0]
 --                            12 => 24-bit sample sitting in tdata[31:8]
 --   0x04  RW  DIV    frame rate divisor; frame rate = aud_clk / (DIV+1).
---                    Default 504 => 24.242 MHz / 505 = 47.994 kHz (-0.012%).
+--                    Default 511 => 24.576 MHz / 512 = exactly 48 kHz.
 --   0x08  R   MAGIC  0x4D363541 ("M65A") for probing
 --   0x0C  R   STAT   [15:0]  frames sent (wraps)
 --                    [31:16] beats the sink was not ready for (backpressure)
@@ -101,9 +115,12 @@ end dp_audio_axis;
 
 architecture rtl of dp_audio_axis is
 
-  -- 24.242 MHz / (504+1) = 47.994 kHz, 0.012% low.  No sink cares about that,
-  -- and DIV is a register so it can be retuned without rebuilding.
-  constant DIV_DEFAULT : natural := 504;
+  -- dp_audio_ref_clk measured on the board is 24,575,995 Hz -- that is 24.576
+  -- MHz, the canonical 512*48000 audio master clock.  (Vivado's board preset
+  -- reports 24.242 MHz for this output; the driver reprograms it, so trust the
+  -- hardware, not the preset.)  Dividing by 512 therefore lands exactly on
+  -- 48 kHz with no error at all.
+  constant DIV_DEFAULT : natural := 511;
 
   signal aud_clk : std_logic;
 
