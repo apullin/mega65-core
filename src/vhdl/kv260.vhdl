@@ -77,6 +77,28 @@ entity container is
     -- samples in the cpuclock domain; dp_audio_axis does the clock crossing
     -- and the AXI4-Stream framing.
     ------------------------------------------------------------------------
+    -- Attic RAM's AXI master, out to a PS high-performance slave port.
+    attic_aresetn : in  std_logic := '0';
+    attic_awaddr  : out std_logic_vector(31 downto 0);
+    attic_awprot  : out std_logic_vector(2 downto 0);
+    attic_awvalid : out std_logic;
+    attic_awready : in  std_logic := '0';
+    attic_wdata   : out std_logic_vector(31 downto 0);
+    attic_wstrb   : out std_logic_vector(3 downto 0);
+    attic_wvalid  : out std_logic;
+    attic_wready  : in  std_logic := '0';
+    attic_bresp   : in  std_logic_vector(1 downto 0) := "00";
+    attic_bvalid  : in  std_logic := '0';
+    attic_bready  : out std_logic;
+    attic_araddr  : out std_logic_vector(31 downto 0);
+    attic_arprot  : out std_logic_vector(2 downto 0);
+    attic_arvalid : out std_logic;
+    attic_arready : in  std_logic := '0';
+    attic_rdata   : in  std_logic_vector(31 downto 0) := (others => '0');
+    attic_rresp   : in  std_logic_vector(1 downto 0) := "00";
+    attic_rvalid  : in  std_logic := '0';
+    attic_rready  : out std_logic;
+
     audio_clk   : out std_logic;
     audio_left  : out std_logic_vector(19 downto 0);
     audio_right : out std_logic_vector(19 downto 0);
@@ -284,9 +306,15 @@ begin
   -- does not try to fetch glyphs from here -- that needs the controller's
   -- separate viciv_* port set, which is a follow-up.
   ----------------------------------------------------------------------------
-  atticram0 : entity work.expansionram_uram
+  -- Attic RAM lives in PS DDR rather than UltraRAM.  The XCK26 has 64 URAM
+  -- blocks = 2 MB, and the MEGA65 expects 8 MB, so the URAM version aliased
+  -- four ways -- software assuming 8 MB corrupted itself quietly.  DDR gives
+  -- the real size, and costs nothing in the fabric.  See expansionram_axi.vhdl
+  -- for why this does not make the machine depend on Linux.
+  atticram0 : entity work.expansionram_axi
     generic map (
-      ADDR_BITS => 21              -- 2 MB, = 64 URAM blocks
+      BASE_ADDR => x"70000000",    -- must be reserved from Linux
+      ADDR_BITS => 23              -- 8 MB
     )
     port map (
       clock             => pixelclock,
@@ -296,7 +324,29 @@ begin
       write_request     => expansionram_write,
       rdata             => expansionram_rdata,
       data_ready_toggle => expansionram_data_ready_toggle,
-      busy              => expansionram_busy
+      busy              => expansionram_busy,
+
+      m_axi_aclk    => clk_in,
+      m_axi_aresetn => attic_aresetn,
+      m_axi_awaddr  => attic_awaddr,
+      m_axi_awprot  => attic_awprot,
+      m_axi_awvalid => attic_awvalid,
+      m_axi_awready => attic_awready,
+      m_axi_wdata   => attic_wdata,
+      m_axi_wstrb   => attic_wstrb,
+      m_axi_wvalid  => attic_wvalid,
+      m_axi_wready  => attic_wready,
+      m_axi_bresp   => attic_bresp,
+      m_axi_bvalid  => attic_bvalid,
+      m_axi_bready  => attic_bready,
+      m_axi_araddr  => attic_araddr,
+      m_axi_arprot  => attic_arprot,
+      m_axi_arvalid => attic_arvalid,
+      m_axi_arready => attic_arready,
+      m_axi_rdata   => attic_rdata,
+      m_axi_rresp   => attic_rresp,
+      m_axi_rvalid  => attic_rvalid,
+      m_axi_rready  => attic_rready
     );
 
   -- MEGA65 main component.
