@@ -111,6 +111,18 @@ set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME 
 
 
 ## ---------------------------------------------------------------------------
+## The DisplayPort audio reference clock.
+##
+## dp_audio_ref_clk comes out of the PS and clocks the audio stream master, but
+## the tool has no way to know its period, so without this the whole audio
+## domain is simply *not analysed* -- which reads as "0 failing endpoints" and
+## is not the same thing as passing.  Measured on the board it is 24,575,995 Hz,
+## i.e. 24.576 MHz, the canonical 512 x 48000 audio master clock.  (Vivado's
+## board preset claims 24.242 MHz for this output; the driver reprograms it, so
+## the hardware is the authority.)
+create_clock -period 40.690 -name dp_audio_ref_clk \
+    [get_pins -quiet -hier -filter {NAME =~ *dpaud/inst/bufg_aud/O}]
+
 ## Audio clock crossings.
 ##
 ## dp_audio_axis deliberately spans three domains: AXI-Lite config on the
