@@ -129,8 +129,9 @@ set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME 
 ## 24,575,995 Hz measured on the board (the canonical 512 x 48000 audio master
 ## clock), not the 24.242 MHz the board preset claims: the driver reprograms it,
 ## so the hardware is the authority.
-create_clock -period 40.690 -name dp_audio_ref_clk \
-    [get_pins -quiet -hier -filter {NAME =~ *PS8_i/DPAUDIOREFCLK}]
+## Kept on ONE line deliberately: the build script filters this file line by
+## line, and a continuation would be orphaned from its command.
+create_clock -period 40.690 -name dp_audio_ref_clk [get_pins -quiet -hier -filter {NAME =~ *PS8_i/DPAUDIOREFCLK}]
 
 ## Audio clock crossings.
 ##
