@@ -166,3 +166,18 @@ set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME 
 ## core (that needs plumbing through iomapper into sdcardio), so the toggle
 ## logic is trimmed.  The constraint is kept for when it is connected.
 set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *f011ctl/inst/chg_tog_reg*}]
+
+## Attic RAM clock crossing.
+##
+## The core drives the expansion-RAM interface from pixelclock; the AXI master
+## runs on the interconnect clock.  A request/ack toggle handshake carries
+## requests across, and the latched address/data are held still between the two
+## toggles -- so bound the datapath rather than false-pathing it, to keep the
+## bytes together with the toggle that announces them.
+##
+## Getting this wrong is not subtle: the first version sampled the core's
+## signals straight into the AXI domain and produced 177 failing endpoints,
+## every one of them this crossing.
+set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *atticram0/lat_*_reg*}]
+set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *atticram0/req_tog_reg*}]
+set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *atticram0/ack_tog_reg*}]

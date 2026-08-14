@@ -91,13 +91,34 @@ end expansionram_axi;
 
 architecture rtl of expansionram_axi is
 
+  ------------------------------------------------------------------------------
+  -- CLOCK DOMAINS
+  --
+  -- The core drives this interface from pixelclock; the AXI side runs on the
+  -- interconnect's clock.  The first version ran the state machine on the AXI
+  -- clock and sampled the core's signals directly, which is simply wrong -- it
+  -- produced 177 failing endpoints, all of them this crossing.
+  --
+  -- Now it is a request/ack toggle handshake, the same shape as
+  -- dp_audio_axis: the core side latches the request and toggles req; the AXI
+  -- side sees the toggle, runs the transaction against the *latched* values,
+  -- and toggles ack.  Between those two events the latched address and data
+  -- cannot move, so they are ordinary stable signals rather than a race.
+  ------------------------------------------------------------------------------
+  signal req_tog   : std_logic := '0';
+  signal req_sync  : std_logic_vector(2 downto 0) := (others => '0');
+  signal ack_tog   : std_logic := '0';
+  signal ack_sync  : std_logic_vector(2 downto 0) := (others => '0');
+
+  signal lat_addr  : unsigned(26 downto 0) := (others => '0');
+  signal lat_wdata : unsigned(7 downto 0) := (others => '0');
+  signal lat_write : std_logic := '0';
+  signal lat_rdata : unsigned(7 downto 0) := (others => '0');
+
   type state_t is (IDLE, RD_ADDR, RD_DATA, WR_ADDR, WR_DATA, WR_RESP, DONE);
   signal state : state_t := IDLE;
 
-  -- The core's clock and the AXI clock are the same net in this design (both
-  -- pl_clk0-derived), so no crossing is needed here.  Kept as separate ports
-  -- anyway, so a future build can put the AXI side on a faster clock without
-  -- rewriting the interface.
+  -- AXI-domain working registers.
   signal req_addr  : unsigned(31 downto 0) := (others => '0');
   signal byte_lane : integer range 0 to 3 := 0;
   signal wr_byte   : std_logic_vector(7 downto 0) := (others => '0');
@@ -105,15 +126,34 @@ architecture rtl of expansionram_axi is
   signal toggle_i  : std_logic := '0';
   signal busy_i    : std_logic := '1';
 
-  -- Requests are edge-triggered: the core raises read_request/write_request
-  -- and we must not re-run the same transaction while it is still high.
-  signal rd_last : std_logic := '0';
-  signal wr_last : std_logic := '0';
 
 begin
 
   busy              <= busy_i;
   data_ready_toggle <= toggle_i;
+
+  -- Core clock domain.
+  process (clock)
+  begin
+    if rising_edge(clock) then
+      ack_sync <= ack_sync(1 downto 0) & ack_tog;
+
+      if busy_i = '0' then
+        if read_request = '1' or write_request = '1' then
+          lat_addr  <= address;
+          lat_wdata <= wdata;
+          lat_write <= write_request;
+          req_tog   <= not req_tog;
+          busy_i    <= '1';
+        end if;
+      elsif ack_sync(2) /= ack_sync(1) then
+        -- transaction complete; the AXI side is no longer touching lat_rdata
+        rdata    <= lat_rdata;
+        toggle_i <= not toggle_i;
+        busy_i   <= '0';
+      end if;
+    end if;
+  end process;
 
   process (m_axi_aclk)
     variable a : unsigned(31 downto 0);
@@ -121,37 +161,33 @@ begin
     if rising_edge(m_axi_aclk) then
       if m_axi_aresetn = '0' then
         state         <= IDLE;
-        busy_i        <= '1';
         m_axi_awvalid <= '0';
         m_axi_wvalid  <= '0';
         m_axi_bready  <= '0';
         m_axi_arvalid <= '0';
         m_axi_rready  <= '0';
-        rd_last       <= '0';
-        wr_last       <= '0';
+        req_sync      <= (others => '0');
       else
-        rd_last <= read_request;
-        wr_last <= write_request;
+        req_sync <= req_sync(1 downto 0) & req_tog;
 
         case state is
           when IDLE =>
-            busy_i <= '0';
             -- wrap rather than run off the end, as the real machine does
-            a := BASE_ADDR + resize(address(ADDR_BITS-1 downto 0), 32);
+            a := BASE_ADDR + resize(lat_addr(ADDR_BITS-1 downto 0), 32);
             byte_lane <= to_integer(a(1 downto 0));
             req_addr  <= a(31 downto 2) & "00";
 
-            if read_request = '1' and rd_last = '0' then
-              busy_i        <= '1';
-              m_axi_araddr  <= std_logic_vector(a(31 downto 2) & "00");
-              m_axi_arvalid <= '1';
-              state         <= RD_ADDR;
-            elsif write_request = '1' and wr_last = '0' then
-              busy_i        <= '1';
-              wr_byte       <= std_logic_vector(wdata);
-              m_axi_awaddr  <= std_logic_vector(a(31 downto 2) & "00");
-              m_axi_awvalid <= '1';
-              state         <= WR_ADDR;
+            if req_sync(2) /= req_sync(1) then
+              if lat_write = '1' then
+                wr_byte       <= std_logic_vector(lat_wdata);
+                m_axi_awaddr  <= std_logic_vector(a(31 downto 2) & "00");
+                m_axi_awvalid <= '1';
+                state         <= WR_ADDR;
+              else
+                m_axi_araddr  <= std_logic_vector(a(31 downto 2) & "00");
+                m_axi_arvalid <= '1';
+                state         <= RD_ADDR;
+              end if;
             end if;
 
           when RD_ADDR =>
@@ -165,14 +201,12 @@ begin
             if m_axi_rvalid = '1' then
               m_axi_rready <= '0';
               case byte_lane is
-                when 0 => rdata <= unsigned(m_axi_rdata(7 downto 0));
-                when 1 => rdata <= unsigned(m_axi_rdata(15 downto 8));
-                when 2 => rdata <= unsigned(m_axi_rdata(23 downto 16));
-                when 3 => rdata <= unsigned(m_axi_rdata(31 downto 24));
+                when 0 => lat_rdata <= unsigned(m_axi_rdata(7 downto 0));
+                when 1 => lat_rdata <= unsigned(m_axi_rdata(15 downto 8));
+                when 2 => lat_rdata <= unsigned(m_axi_rdata(23 downto 16));
+                when 3 => lat_rdata <= unsigned(m_axi_rdata(31 downto 24));
               end case;
-              -- the core watches for this to change, not for a level
-              toggle_i <= not toggle_i;
-              state    <= DONE;
+              state <= DONE;
             end if;
 
           when WR_ADDR =>
@@ -207,12 +241,9 @@ begin
             end if;
 
           when DONE =>
-            -- hold until the core drops its request, so one request is one
-            -- transaction however long the core keeps the line high
-            if read_request = '0' and write_request = '0' then
-              busy_i <= '0';
-              state  <= IDLE;
-            end if;
+            -- tell the core we are finished; it owns lat_rdata from here
+            ack_tog <= not ack_tog;
+            state   <= IDLE;
         end case;
       end if;
     end if;
