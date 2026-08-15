@@ -107,6 +107,10 @@ entity sdcardio is
 
     virtualise_f011_drive0 : in std_logic;
     virtualise_f011_drive1 : in std_logic;
+    -- Host-side image metadata.  These are additive to the hypervisor-owned
+    -- $D68A flags, so the original path remains authoritative and compatible.
+    external_d64_f011 : in std_logic_vector(1 downto 0) := "00";
+    external_disk_changed : in std_logic := '0';
 
     colourram_at_dc00 : in std_logic;
     viciii_iomode : in std_logic_vector(1 downto 0);
@@ -412,6 +416,8 @@ architecture behavioural of sdcardio is
   signal f011_mega_disk2 : std_logic := '0';
   signal f011_d64_disk : std_logic := '0';
   signal f011_d64_disk2 : std_logic := '0';
+  signal f011_d64_disk_effective : std_logic := '0';
+  signal f011_d64_disk2_effective : std_logic := '0';
 
   signal f011_led : std_logic := '0';
   signal f011_motor : std_logic := '0';
@@ -688,6 +694,11 @@ architecture behavioural of sdcardio is
   end function;
 
 begin  -- behavioural
+
+  -- Linux can describe the mounted host image without taking away anything
+  -- written by Hyppo.  Either source saying D64 is sufficient.
+  f011_d64_disk_effective <= f011_d64_disk or external_d64_f011(0);
+  f011_d64_disk2_effective <= f011_d64_disk2 or external_d64_f011(1);
 
 --**********************************************************************
   -- SD card controller module.
@@ -1055,7 +1066,8 @@ begin  -- behavioural
            f011_disk_changed,sb_cpu_rdata,last_sd_rxbyte,f011_eq_inhibit,
            sd_interface_select_internal,sdcard_busy,sd_handshake,sd_data_ready,
            f011_swap_drives,virtualise_f011_drive0,
-           virtualise_f011_drive1,f011_d64_disk,f011_d64_disk2,f011_mega_disk,
+           virtualise_f011_drive1,f011_d64_disk_effective,
+           f011_d64_disk2_effective,f011_mega_disk,
            f011_mega_disk2,fdc_write_byte_number,autotune_enable,j21in,dipsw,dipsw_hi,
            latched_disk_change_event,fdc_sector_found_2x,fdc_sector_end_2x,
            silent_sdcard,fdc_crc_error,fdc_2x_select,found_track_2x,
@@ -1318,8 +1330,8 @@ begin  -- behavioural
             fastio_rdata(2) <= virtualise_f011_drive0;
             fastio_rdata(3) <= virtualise_f011_drive1;
 
-            fastio_rdata(6) <= f011_d64_disk;
-            fastio_rdata(7) <= f011_d64_disk2;
+            fastio_rdata(6) <= f011_d64_disk_effective;
+            fastio_rdata(7) <= f011_d64_disk2_effective;
 
           when x"8b" =>
             -- BG the description seems in conflict with the assignment in the write section (below)
@@ -2173,7 +2185,7 @@ begin  -- behavioural
       else
         physical_sector <= f011_sector + 9;  -- +10 minus 1
       end if;
-      if f011_mega_disk='0' and f011_d64_disk='0' then
+      if f011_mega_disk='0' and f011_d64_disk_effective='0' then
         diskimage1_offset <=
           to_unsigned(
             to_integer(f011_track(6 downto 0) & "0000")        -- track x 16
@@ -2185,7 +2197,7 @@ begin  -- behavioural
           -- point to first sector if disk instead
           diskimage1_offset <= to_unsigned(0,17);
         end if;
-      elsif f011_mega_disk='0' and f011_d64_disk='1' then
+      elsif f011_mega_disk='0' and f011_d64_disk_effective='1' then
         -- 1541 disk image
         -- CBDOS ROM is responsible for implementing the 1541 geometry.
         -- We just present 1581-like geometry, but truncated to 683 x 256
@@ -2203,7 +2215,7 @@ begin  -- behavioural
           -- point to first sector if disk instead
            diskimage1_offset <= to_unsigned(0,17);
          end if;
-      elsif f011_mega_disk='1' and f011_d64_disk='1' then
+      elsif f011_mega_disk='1' and f011_d64_disk_effective='1' then
         -- XXX 1571 disk image
         -- 1541 disk image
         -- CBDOS ROM is responsible for implementing the 1541 geometry.
@@ -2234,7 +2246,7 @@ begin  -- behavioural
         end if;
       end if;
 
-      if f011_mega_disk2='0' and f011_d64_disk2='0' then
+      if f011_mega_disk2='0' and f011_d64_disk2_effective='0' then
         diskimage2_offset <=
           to_unsigned(
             to_integer(f011_track(6 downto 0) & "0000")
@@ -2245,7 +2257,7 @@ begin  -- behavioural
           -- point to last sector if disk instead
           diskimage2_offset <= to_unsigned(0,17);
         end if;
-      elsif f011_mega_disk2='0' and f011_d64_disk2='1' then
+      elsif f011_mega_disk2='0' and f011_d64_disk2_effective='1' then
         -- 1541 disk image
         -- CBDOS ROM is responsible for implementing the 1541 geometry.
         -- We just present 1581-like geometry, but truncated to 683 x 256
@@ -2263,7 +2275,7 @@ begin  -- behavioural
           -- point to last sector if disk instead
           diskimage2_offset <= to_unsigned(0,17);
         end if;
-      elsif f011_mega_disk2='1' and f011_d64_disk2='1' then
+      elsif f011_mega_disk2='1' and f011_d64_disk2_effective='1' then
         -- 1571 disk image
         -- CBDOS ROM is responsible for implementing the 1571 geometry.
         -- We just present 1581-like geometry, but truncated to 683 x 2 x 256
@@ -4418,8 +4430,14 @@ begin  -- behavioural
 
       end case;
 
+      -- A host image swap is asynchronous to guest register traffic.  Latch
+      -- the pulse after all guest-side clear paths so it cannot be lost when a
+      -- deselect happens on the same core clock.
+      if external_disk_changed = '1' then
+        latched_disk_change_event <= '1';
+      end if;
+
     end if;
   end process;
 
 end behavioural;
-

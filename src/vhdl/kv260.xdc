@@ -87,12 +87,10 @@ set_property -dict {PACKAGE_PIN A12 IOSTANDARD LVCMOS33 PULLUP TRUE} [get_ports 
 ## Remote keyboard clock crossing.
 ##
 ## The virtual keyboard's three "currently pressed" matrix positions are written
-## by the PS on the 100 MHz AXI clock and read by the core on its 40.5 MHz
-## clock, with no synchroniser.  That is deliberate: a key is held down for tens
-## of milliseconds while the core rescans the matrix at 1 kHz, so the value is
-## quasi-static and a setup check against a specific 40.5 MHz edge means
-## nothing.  Left unconstrained the tool reports ~90 failing endpoints here and
-## nowhere else, which buries any real violation.
+## by the PS on the 100 MHz AXI clock and passed through two core-clocked
+## synchronizer stages before the keyboard scanner sees them.  A key is held for
+## tens of milliseconds, so independent bit synchronizers are sufficient; the
+## datapath bound keeps each first-stage crossing short as well.
 ##
 ## Bound the datapath rather than declaring a false path: that still holds
 ## bit-to-bit skew well under a scan interval, so a scan can never latch a
@@ -108,6 +106,7 @@ set_property -dict {PACKAGE_PIN A12 IOSTANDARD LVCMOS33 PULLUP TRUE} [get_ports 
 ## block design is a black box so this matches nothing and merely warns; at
 ## implementation it matches the 24 key registers.
 set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *vkbd/inst/keys_reg_reg*}]
+set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *vkbd/inst/ctrl_reg_reg*}]
 
 
 ## ---------------------------------------------------------------------------
@@ -131,12 +130,19 @@ set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME 
 ## so the hardware is the authority.
 ## Kept on ONE line deliberately: the build script filters this file line by
 ## line, and a continuation would be orphaned from its command.
-create_clock -period 40.690 -name dp_audio_ref_clk [get_pins -quiet -hier -filter {NAME =~ *PS8_i/DPAUDIOREFCLK}]
+create_clock -period 40.690 -name dp_audio_ref_clk [get_pins -quiet -of_objects [get_cells -quiet -hier -filter {REF_NAME == PS8}] -filter {REF_PIN_NAME == DPAUDIOREFCLK}]
+
+## s_axi_aresetn is asynchronously asserted and synchronously deasserted in the
+## audio clock domain.  Recovery/removal checks on the synchronizer's CLR pins
+## therefore describe the intentional asynchronous assertion, not a path that
+## can or should close between the unrelated PL and DisplayPort clocks.
+set_false_path -to [get_pins -quiet -hier -regexp {.*dpaud/inst/aud_reset_pipe_reg\[[01]\]/CLR}]
 
 ## Audio clock crossings.
 ##
 ## dp_audio_axis deliberately spans three domains: AXI-Lite config on the
-## interconnect's 100 MHz clock, the stream on the 24.2 MHz DisplayPort audio
+## interconnect's 100 MHz clock, the stream on the runtime 24.576 MHz
+## DisplayPort audio
 ## reference clock, and the core's mixer on the 40.5 MHz CPU clock.  Every
 ## crossing below is either a two-flop synchroniser or the sample handshake,
 ## both of which the timing engine has no way to recognise on its own -- left
@@ -154,17 +160,16 @@ set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME 
 set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/ack_tog_reg*}]
 set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/ctrl_reg_reg*}]
 set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/div_reg_reg*}]
-set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/frames_reg*}]
-set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/stalls_reg*}]
+set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/frames_reg* && IS_SEQUENTIAL == 1}]
+set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/stalls_reg* && IS_SEQUENTIAL == 1}]
 
 ## F011 control: same quasi-static crossing as the keyboard and audio blocks.
 ## Config bits are written by a human and then sit still, so bounding the
 ## datapath is honest; leaving them unconstrained cost 2 failing endpoints in
 ## v9, which were the only ones in the whole design.
 set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *f011ctl/inst/ctrl_reg_reg*}]
-## chg_tog currently matches nothing: disk_changed is not yet wired into the
-## core (that needs plumbing through iomapper into sdcardio), so the toggle
-## logic is trimmed.  The constraint is kept for when it is connected.
+## The disk-change toggle is now carried through iomapper into sdcardio and is
+## live in the implemented design; keep its CDC datapath bounded as well.
 set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *f011ctl/inst/chg_tog_reg*}]
 
 ## Attic RAM clock crossing.

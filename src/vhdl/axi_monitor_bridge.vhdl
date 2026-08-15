@@ -96,6 +96,13 @@ architecture rtl of axi_monitor_bridge is
   signal rvalid_i  : std_logic := '0';
   signal rdata_i   : std_logic_vector(31 downto 0) := (others => '0');
   signal wr_addr   : std_logic_vector(3 downto 0) := (others => '0');
+  signal wr_data   : std_logic_vector(31 downto 0) := (others => '0');
+  signal wr_strb   : std_logic_vector(3 downto 0) := (others => '0');
+  signal aw_held   : std_logic := '0';
+  signal w_held    : std_logic := '0';
+
+  attribute ASYNC_REG : string;
+  attribute ASYNC_REG of rx_sync : signal is "TRUE";
 
 begin
 
@@ -108,8 +115,13 @@ begin
   s_axi_rdata   <= rdata_i;
   s_axi_rresp   <= "00";
 
+  awready_i <= '1' when aw_held = '0' and bvalid_i = '0' else '0';
+  wready_i  <= '1' when w_held  = '0' and bvalid_i = '0' else '0';
+  arready_i <= '1' when rvalid_i = '0' else '0';
+
   process (s_axi_aclk)
-    variable do_write : boolean;
+    variable rx_arrived_now : boolean;
+    variable rx_read_now    : boolean;
   begin
     if rising_edge(s_axi_aclk) then
       if s_axi_aresetn = '0' then
@@ -119,13 +131,15 @@ begin
         rx_state   <= RX_IDLE;
         rx_valid   <= '0';
         rx_overrun <= '0';
-        awready_i  <= '0';
-        wready_i   <= '0';
+        aw_held    <= '0';
+        w_held     <= '0';
         bvalid_i   <= '0';
-        arready_i  <= '0';
         rvalid_i   <= '0';
         rx_sync    <= (others => '1');
       else
+        rx_arrived_now := false;
+        rx_read_now := arready_i = '1' and s_axi_arvalid = '1' and
+                       s_axi_araddr(3 downto 2) = "01";
 
         ----------------------------------------------------------------------
         -- UART transmit
@@ -188,10 +202,11 @@ begin
               rx_clkcnt <= 0;
               rx_state  <= RX_IDLE;
               rx_byte   <= rx_shift;
-              if rx_valid = '1' then
+              if rx_valid = '1' and not rx_read_now then
                 rx_overrun <= '1';            -- host did not keep up
               end if;
               rx_valid <= '1';
+              rx_arrived_now := true;
             else
               rx_clkcnt <= rx_clkcnt + 1;
             end if;
@@ -200,52 +215,59 @@ begin
         ----------------------------------------------------------------------
         -- AXI4-Lite write
         ----------------------------------------------------------------------
-        do_write := false;
-        if awready_i = '0' and s_axi_awvalid = '1' then
-          awready_i <= '1';
-          wr_addr   <= s_axi_awaddr;
-        else
-          awready_i <= '0';
+        if awready_i = '1' and s_axi_awvalid = '1' then
+          wr_addr <= s_axi_awaddr;
+          aw_held <= '1';
         end if;
 
-        if wready_i = '0' and s_axi_wvalid = '1' then
-          wready_i <= '1';
-          do_write := true;
-        else
-          wready_i <= '0';
+        if wready_i = '1' and s_axi_wvalid = '1' then
+          wr_data <= s_axi_wdata;
+          wr_strb <= s_axi_wstrb;
+          w_held  <= '1';
         end if;
 
-        if do_write then
+        if bvalid_i = '1' then
+          if s_axi_bready = '1' then
+            bvalid_i <= '0';
+          end if;
+        elsif aw_held = '1' and w_held = '1' then
           case wr_addr(3 downto 2) is
             when "00" =>                       -- 0x00 TX data
-              if tx_state = TX_IDLE then
-                tx_shift  <= '1' & s_axi_wdata(7 downto 0) & '0';  -- stop,data,start
+              if wr_strb(0) = '1' and tx_state = TX_IDLE then
+                tx_shift  <= '1' & wr_data(7 downto 0) & '0';  -- stop,data,start
                 tx_bitcnt <= 0;
                 tx_clkcnt <= 0;
                 tx_busy   <= '1';
                 tx_state  <= TX_SEND;
               end if;
             when "11" =>                       -- 0x0C CONTROL
-              if s_axi_wdata(0) = '1' then
+              if wr_strb(0) = '1' and wr_data(0) = '1' then
                 rx_overrun <= '0';
               end if;
             when others => null;
           end case;
+          aw_held   <= '0';
+          w_held    <= '0';
           bvalid_i <= '1';
-        elsif bvalid_i = '1' and s_axi_bready = '1' then
-          bvalid_i <= '0';
         end if;
 
         ----------------------------------------------------------------------
         -- AXI4-Lite read
         ----------------------------------------------------------------------
-        if arready_i = '0' and s_axi_arvalid = '1' then
-          arready_i <= '1';
+        if rvalid_i = '1' then
+          if s_axi_rready = '1' then
+            rvalid_i <= '0';
+          end if;
+        elsif arready_i = '1' and s_axi_arvalid = '1' then
           rdata_i   <= (others => '0');
           case s_axi_araddr(3 downto 2) is
             when "01" =>                       -- 0x04 RX data
               rdata_i(7 downto 0) <= rx_byte;
-              rx_valid <= '0';
+              -- If a fresh UART byte completed on this same edge, return the
+              -- previous byte and leave the new one pending for the next read.
+              if not rx_arrived_now then
+                rx_valid <= '0';
+              end if;
             when "10" =>                       -- 0x08 STATUS
               rdata_i(0) <= tx_busy;
               rdata_i(1) <= rx_valid;
@@ -253,11 +275,6 @@ begin
             when others => null;
           end case;
           rvalid_i <= '1';
-        else
-          arready_i <= '0';
-          if rvalid_i = '1' and s_axi_rready = '1' then
-            rvalid_i <= '0';
-          end if;
         end if;
 
       end if;

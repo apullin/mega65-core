@@ -55,7 +55,8 @@
 -- 10.000, slack -30.000".  Avoiding an unknown by inventing a constraint of my
 -- own was the wrong trade.
 --
--- So the stream now runs on dp_audio_ref_clk (24.242 MHz here), which is what
+-- So the stream now runs on dp_audio_ref_clk (24 MHz in the static PS preset),
+-- which is what
 -- that output exists for, buffered onto a global clock and handed back to the
 -- PS so both ends of the stream share one clock.  The AXI-Lite registers stay
 -- on pl_clk0 because that is the interconnect's clock; the handful of config
@@ -117,12 +118,14 @@ architecture rtl of dp_audio_axis is
 
   -- dp_audio_ref_clk measured on the board is 24,575,995 Hz -- that is 24.576
   -- MHz, the canonical 512*48000 audio master clock.  (Vivado's board preset
-  -- reports 24.242 MHz for this output; the driver reprograms it, so trust the
+  -- reports 24 MHz for this output; the driver reprograms it, so trust the
   -- hardware, not the preset.)  Dividing by 512 therefore lands exactly on
   -- 48 kHz with no error at all.
   constant DIV_DEFAULT : natural := 511;
 
   signal aud_clk : std_logic;
+  signal aud_reset_pipe : std_logic_vector(1 downto 0) := (others => '0');
+  signal aud_resetn : std_logic := '0';
 
   -- Config values as seen in the audio domain.  They are written by a human
   -- via AXI and then sit still, so a two-flop sync per bit is honest here:
@@ -155,6 +158,10 @@ architecture rtl of dp_audio_axis is
   signal rvalid_i  : std_logic := '0';
   signal rdata_i   : std_logic_vector(31 downto 0) := (others => '0');
   signal wr_addr   : std_logic_vector(3 downto 0) := (others => '0');
+  signal wr_data   : std_logic_vector(31 downto 0) := (others => '0');
+  signal wr_strb   : std_logic_vector(3 downto 0) := (others => '0');
+  signal aw_held   : std_logic := '0';
+  signal w_held    : std_logic := '0';
 
   -- Sample-rate strobe
   signal rate_cnt : unsigned(15 downto 0) := (others => '0');
@@ -189,6 +196,33 @@ architecture rtl of dp_audio_axis is
   signal tdata_i  : std_logic_vector(31 downto 0) := (others => '0');
   signal tid_i    : std_logic := '0';
 
+  -- Tell Vivado which generated module-reference clock owns the AXIS bus.  A
+  -- name-inferred interface alone does not associate aud_clk_out with M_AXIS,
+  -- which produced BD 41-967 and left its frequency at a bogus 100 MHz.
+  attribute X_INTERFACE_INFO : string;
+  attribute X_INTERFACE_PARAMETER : string;
+  attribute X_INTERFACE_INFO of aud_clk_in : signal is
+    "xilinx.com:signal:clock:1.0 aud_clk_in CLK";
+  attribute X_INTERFACE_PARAMETER of aud_clk_in : signal is
+    "XIL_INTERFACENAME aud_clk_in, FREQ_HZ 24000000, PHASE 0.0";
+  attribute X_INTERFACE_INFO of aud_clk_out : signal is
+    "xilinx.com:signal:clock:1.0 aud_clk_out CLK";
+  attribute X_INTERFACE_PARAMETER of aud_clk_out : signal is
+    "XIL_INTERFACENAME aud_clk_out, ASSOCIATED_BUSIF M_AXIS, FREQ_HZ 24000000, PHASE 0.0";
+
+  attribute ASYNC_REG : string;
+  attribute ASYNC_REG of aud_reset_pipe : signal is "TRUE";
+  attribute ASYNC_REG of ctrl_meta : signal is "TRUE";
+  attribute ASYNC_REG of ctrl_aud : signal is "TRUE";
+  attribute ASYNC_REG of div_meta : signal is "TRUE";
+  attribute ASYNC_REG of div_aud : signal is "TRUE";
+  attribute ASYNC_REG of req_sync : signal is "TRUE";
+  attribute ASYNC_REG of ack_sync : signal is "TRUE";
+  attribute ASYNC_REG of frames_meta : signal is "TRUE";
+  attribute ASYNC_REG of frames_sync : signal is "TRUE";
+  attribute ASYNC_REG of stalls_meta : signal is "TRUE";
+  attribute ASYNC_REG of stalls_sync : signal is "TRUE";
+
   -- Sign-extend the 20-bit sample to 32 bits and slide it to wherever the sink
   -- expects it to sit.
   function place(sample : std_logic_vector(19 downto 0);
@@ -214,6 +248,10 @@ begin
   s_axi_rdata   <= rdata_i;
   s_axi_rresp   <= "00";
 
+  awready_i <= '1' when aw_held = '0' and bvalid_i = '0' else '0';
+  wready_i  <= '1' when w_held  = '0' and bvalid_i = '0' else '0';
+  arready_i <= '1' when rvalid_i = '0' else '0';
+
   m_axis_tvalid <= tvalid_i;
   m_axis_tdata  <= tdata_i;
   m_axis_tid(0) <= tid_i;
@@ -224,6 +262,20 @@ begin
   -- clocks anything, and hand the buffered version back to the PS.
   bufg_aud : BUFG port map (I => aud_clk_in, O => aud_clk);
   aud_clk_out <= aud_clk;
+
+  -- The AXI reset is synchronized to pl_clk0.  Re-synchronize its deassertion
+  -- before using it in the unrelated DisplayPort audio clock domain while
+  -- retaining immediate assertion during a fabric reset.
+  process (aud_clk, s_axi_aresetn)
+  begin
+    if s_axi_aresetn = '0' then
+      aud_reset_pipe <= (others => '0');
+    elsif rising_edge(aud_clk) then
+      aud_reset_pipe(0) <= '1';
+      aud_reset_pipe(1) <= aud_reset_pipe(0);
+    end if;
+  end process;
+  aud_resetn <= aud_reset_pipe(1);
 
   ------------------------------------------------------------------------------
   -- Config into the audio domain, counters back out.
@@ -265,7 +317,7 @@ begin
   process (aud_clk)
   begin
     if rising_edge(aud_clk) then
-      if s_axi_aresetn = '0' then
+      if aud_resetn = '0' then
         rate_cnt <= (others => '0');
         frame_go <= '0';
         tx_state <= TX_IDLE;
@@ -333,47 +385,57 @@ begin
   -- AXI4-Lite register file
   ------------------------------------------------------------------------------
   process (s_axi_aclk)
-    variable do_write : boolean;
   begin
     if rising_edge(s_axi_aclk) then
       if s_axi_aresetn = '0' then
         ctrl_reg  <= (others => '0');
         ctrl_reg(7 downto 4) <= x"4";     -- default: 24-bit sample in [23:0]
         div_reg   <= to_unsigned(DIV_DEFAULT, 16);
-        awready_i <= '0';
-        wready_i  <= '0';
+        aw_held   <= '0';
+        w_held    <= '0';
         bvalid_i  <= '0';
-        arready_i <= '0';
         rvalid_i  <= '0';
       else
-        if awready_i = '0' and s_axi_awvalid = '1' then
-          awready_i <= '1';
-          wr_addr   <= s_axi_awaddr;
-        else
-          awready_i <= '0';
+        if awready_i = '1' and s_axi_awvalid = '1' then
+          wr_addr <= s_axi_awaddr;
+          aw_held <= '1';
         end if;
 
-        do_write := false;
-        if wready_i = '0' and s_axi_wvalid = '1' then
-          wready_i <= '1';
-          do_write := true;
-        else
-          wready_i <= '0';
+        if wready_i = '1' and s_axi_wvalid = '1' then
+          wr_data <= s_axi_wdata;
+          wr_strb <= s_axi_wstrb;
+          w_held  <= '1';
         end if;
 
-        if do_write then
+        if bvalid_i = '1' then
+          if s_axi_bready = '1' then
+            bvalid_i <= '0';
+          end if;
+        elsif aw_held = '1' and w_held = '1' then
           case wr_addr(3 downto 2) is
-            when "00"   => ctrl_reg <= s_axi_wdata(7 downto 0);
-            when "01"   => div_reg  <= unsigned(s_axi_wdata(15 downto 0));
+            when "00" =>
+              if wr_strb(0) = '1' then
+                ctrl_reg <= wr_data(7 downto 0);
+              end if;
+            when "01" =>
+              if wr_strb(0) = '1' then
+                div_reg(7 downto 0) <= unsigned(wr_data(7 downto 0));
+              end if;
+              if wr_strb(1) = '1' then
+                div_reg(15 downto 8) <= unsigned(wr_data(15 downto 8));
+              end if;
             when others => null;
           end case;
+          aw_held   <= '0';
+          w_held    <= '0';
           bvalid_i <= '1';
-        elsif bvalid_i = '1' and s_axi_bready = '1' then
-          bvalid_i <= '0';
         end if;
 
-        if arready_i = '0' and s_axi_arvalid = '1' then
-          arready_i <= '1';
+        if rvalid_i = '1' then
+          if s_axi_rready = '1' then
+            rvalid_i <= '0';
+          end if;
+        elsif arready_i = '1' and s_axi_arvalid = '1' then
           case s_axi_araddr(3 downto 2) is
             when "00"   => rdata_i <= x"000000" & ctrl_reg;
             when "01"   => rdata_i <= x"0000" & std_logic_vector(div_reg);
@@ -382,11 +444,6 @@ begin
                                       std_logic_vector(frames_sync);
           end case;
           rvalid_i <= '1';
-        else
-          arready_i <= '0';
-          if rvalid_i = '1' and s_axi_rready = '1' then
-            rvalid_i <= '0';
-          end if;
         end if;
       end if;
     end if;

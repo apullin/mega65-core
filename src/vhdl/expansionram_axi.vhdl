@@ -119,13 +119,13 @@ architecture rtl of expansionram_axi is
   signal lat_write : std_logic := '0';
   signal lat_rdata : unsigned(7 downto 0) := (others => '0');
 
-  type state_t is (IDLE, RD_ADDR, RD_DATA, WR_ADDR, WR_DATA, WR_RESP, DONE);
+  type state_t is (IDLE, RD_ADDR, RD_DATA, WR_SEND, WR_RESP, DONE);
   signal state : state_t := IDLE;
 
   -- AXI-domain working registers.
-  signal req_addr  : unsigned(31 downto 0) := (others => '0');
   signal byte_lane : integer range 0 to 3 := 0;
-  signal wr_byte   : std_logic_vector(7 downto 0) := (others => '0');
+  signal aw_pending : std_logic := '0';
+  signal w_pending  : std_logic := '0';
 
   signal toggle_i  : std_logic := '0';
   -- Starts READY, not busy.  Starting busy deadlocks: the core-side process
@@ -137,11 +137,17 @@ architecture rtl of expansionram_axi is
   -- the controller up long before the PL was loaded.
   signal busy_i    : std_logic := '0';
 
+  attribute ASYNC_REG : string;
+  attribute ASYNC_REG of req_sync : signal is "TRUE";
+  attribute ASYNC_REG of ack_sync : signal is "TRUE";
+
 
 begin
 
   busy              <= busy_i;
   data_ready_toggle <= toggle_i;
+  m_axi_awvalid     <= aw_pending;
+  m_axi_wvalid      <= w_pending;
 
   -- Core clock domain.
   process (clock)
@@ -167,13 +173,15 @@ begin
   end process;
 
   process (m_axi_aclk)
-    variable a : unsigned(31 downto 0);
+    variable a           : unsigned(31 downto 0);
+    variable aw_complete : boolean;
+    variable w_complete  : boolean;
   begin
     if rising_edge(m_axi_aclk) then
       if m_axi_aresetn = '0' then
         state         <= IDLE;
-        m_axi_awvalid <= '0';
-        m_axi_wvalid  <= '0';
+        aw_pending    <= '0';
+        w_pending     <= '0';
         m_axi_bready  <= '0';
         m_axi_arvalid <= '0';
         m_axi_rready  <= '0';
@@ -186,14 +194,24 @@ begin
             -- wrap rather than run off the end, as the real machine does
             a := BASE_ADDR + resize(lat_addr(ADDR_BITS-1 downto 0), 32);
             byte_lane <= to_integer(a(1 downto 0));
-            req_addr  <= a(31 downto 2) & "00";
 
             if req_sync(2) /= req_sync(1) then
               if lat_write = '1' then
-                wr_byte       <= std_logic_vector(lat_wdata);
                 m_axi_awaddr  <= std_logic_vector(a(31 downto 2) & "00");
-                m_axi_awvalid <= '1';
-                state         <= WR_ADDR;
+                m_axi_wdata   <= std_logic_vector(lat_wdata) &
+                                  std_logic_vector(lat_wdata) &
+                                  std_logic_vector(lat_wdata) &
+                                  std_logic_vector(lat_wdata);
+                case to_integer(a(1 downto 0)) is
+                  when 0 => m_axi_wstrb <= "0001";
+                  when 1 => m_axi_wstrb <= "0010";
+                  when 2 => m_axi_wstrb <= "0100";
+                  when 3 => m_axi_wstrb <= "1000";
+                  when others => null;
+                end case;
+                aw_pending <= '1';
+                w_pending  <= '1';
+                state      <= WR_SEND;
               else
                 m_axi_araddr  <= std_logic_vector(a(31 downto 2) & "00");
                 m_axi_arvalid <= '1';
@@ -220,27 +238,21 @@ begin
               state <= DONE;
             end if;
 
-          when WR_ADDR =>
-            if m_axi_awready = '1' then
-              m_axi_awvalid <= '0';
+          when WR_SEND =>
+            -- AW and W may handshake in either order.  Keep each VALID and its
+            -- payload stable until its own READY arrives, and do not move to
+            -- the response phase until both channels have completed.
+            aw_complete := aw_pending = '0';
+            w_complete  := w_pending = '0';
+            if aw_pending = '1' and m_axi_awready = '1' then
+              aw_pending <= '0';
+              aw_complete := true;
             end if;
-            -- write data can be presented independently of the address
-            m_axi_wdata <= wr_byte & wr_byte & wr_byte & wr_byte;
-            case byte_lane is
-              when 0 => m_axi_wstrb <= "0001";
-              when 1 => m_axi_wstrb <= "0010";
-              when 2 => m_axi_wstrb <= "0100";
-              when 3 => m_axi_wstrb <= "1000";
-            end case;
-            m_axi_wvalid <= '1';
-            state        <= WR_DATA;
-
-          when WR_DATA =>
-            if m_axi_awready = '1' then
-              m_axi_awvalid <= '0';
+            if w_pending = '1' and m_axi_wready = '1' then
+              w_pending <= '0';
+              w_complete := true;
             end if;
-            if m_axi_wready = '1' then
-              m_axi_wvalid <= '0';
+            if aw_complete and w_complete then
               m_axi_bready <= '1';
               state        <= WR_RESP;
             end if;

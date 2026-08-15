@@ -28,6 +28,9 @@ entity virtual_keyboard_axi is
     s_axi_aclk    : in  std_logic;
     s_axi_aresetn : in  std_logic;
 
+    -- Destination clock for the values exposed to the MEGA65 core.
+    core_clk       : in  std_logic;
+
     s_axi_awaddr  : in  std_logic_vector(3 downto 0);
     s_axi_awvalid : in  std_logic;
     s_axi_awready : out std_logic;
@@ -47,9 +50,8 @@ entity virtual_keyboard_axi is
     s_axi_rvalid  : out std_logic;
     s_axi_rready  : in  std_logic;
 
-    -- To machine's virtual_to_matrix injector (via new machine ports).
-    -- cpuclock domain in the core; these are steady register values, and the
-    -- injector re-samples them, so a plain CDC of stable bytes is safe.
+    -- To machine's virtual_to_matrix injector (via new machine ports), already
+    -- synchronized into core_clk below.
     virtual_key1 : out unsigned(7 downto 0) := x"FF";
     virtual_key2 : out unsigned(7 downto 0) := x"FF";
     virtual_key3 : out unsigned(7 downto 0) := x"FF";
@@ -62,6 +64,18 @@ architecture rtl of virtual_keyboard_axi is
   signal keys_reg : std_logic_vector(23 downto 0) := (others => '1'); -- 0xFFFFFF
   signal ctrl_reg : std_logic_vector(0 downto 0)  := "0";
 
+  -- Keys are human-speed, quasi-static values, but feeding the AXI-domain
+  -- flops directly into the keyboard scanner left metastability paths into
+  -- ordinary data, clock-enable, and reset pins.  Synchronize every bit before
+  -- it reaches the core.  Only publish a bus after two consecutive core-clock
+  -- samples agree, so the scanner never sees a half-updated key code.
+  signal keys_meta : std_logic_vector(23 downto 0) := (others => '1');
+  signal keys_check : std_logic_vector(23 downto 0) := (others => '1');
+  signal keys_core : std_logic_vector(23 downto 0) := (others => '1');
+  signal ctrl_meta : std_logic_vector(0 downto 0) := "0";
+  signal ctrl_check : std_logic_vector(0 downto 0) := "0";
+  signal ctrl_core : std_logic_vector(0 downto 0) := "0";
+
   signal awready_i : std_logic := '0';
   signal wready_i  : std_logic := '0';
   signal bvalid_i  : std_logic := '0';
@@ -69,6 +83,16 @@ architecture rtl of virtual_keyboard_axi is
   signal rvalid_i  : std_logic := '0';
   signal rdata_i   : std_logic_vector(31 downto 0) := (others => '0');
   signal wr_addr   : std_logic_vector(3 downto 0) := (others => '0');
+  signal wr_data   : std_logic_vector(31 downto 0) := (others => '0');
+  signal wr_strb   : std_logic_vector(3 downto 0) := (others => '0');
+  signal aw_held   : std_logic := '0';
+  signal w_held    : std_logic := '0';
+
+  attribute ASYNC_REG : string;
+  attribute ASYNC_REG of keys_meta : signal is "TRUE";
+  attribute ASYNC_REG of keys_check : signal is "TRUE";
+  attribute ASYNC_REG of ctrl_meta : signal is "TRUE";
+  attribute ASYNC_REG of ctrl_check : signal is "TRUE";
 
 begin
 
@@ -81,55 +105,84 @@ begin
   s_axi_rdata   <= rdata_i;
   s_axi_rresp   <= "00";
 
-  virtual_key1    <= unsigned(keys_reg(7 downto 0));
-  virtual_key2    <= unsigned(keys_reg(15 downto 8));
-  virtual_key3    <= unsigned(keys_reg(23 downto 16));
-  virtual_restore <= not ctrl_reg(0);   -- CTRL bit0=1 => press => output '0'
+  -- AW and W are independent AXI-Lite channels.  Hold each until both have
+  -- arrived, and accept no new request while its single response slot is busy.
+  awready_i <= '1' when aw_held = '0' and bvalid_i = '0' else '0';
+  wready_i  <= '1' when w_held  = '0' and bvalid_i = '0' else '0';
+  arready_i <= '1' when rvalid_i = '0' else '0';
+
+  virtual_key1    <= unsigned(keys_core(7 downto 0));
+  virtual_key2    <= unsigned(keys_core(15 downto 8));
+  virtual_key3    <= unsigned(keys_core(23 downto 16));
+  virtual_restore <= not ctrl_core(0);   -- CTRL bit0=1 => press => output '0'
+
+  process (core_clk)
+  begin
+    if rising_edge(core_clk) then
+      keys_meta <= keys_reg;
+      keys_check <= keys_meta;
+      ctrl_meta <= ctrl_reg;
+      ctrl_check <= ctrl_meta;
+      if keys_meta = keys_check then
+        keys_core <= keys_check;
+      end if;
+      if ctrl_meta = ctrl_check then
+        ctrl_core <= ctrl_check;
+      end if;
+    end if;
+  end process;
 
   process (s_axi_aclk)
-    variable do_write : boolean;
   begin
     if rising_edge(s_axi_aclk) then
       if s_axi_aresetn = '0' then
         keys_reg  <= (others => '1');
         ctrl_reg  <= "0";
-        awready_i <= '0';
-        wready_i  <= '0';
+        aw_held   <= '0';
+        w_held    <= '0';
         bvalid_i  <= '0';
-        arready_i <= '0';
         rvalid_i  <= '0';
       else
-        -- write address
-        if awready_i = '0' and s_axi_awvalid = '1' then
-          awready_i <= '1';
-          wr_addr   <= s_axi_awaddr;
-        else
-          awready_i <= '0';
+        if awready_i = '1' and s_axi_awvalid = '1' then
+          wr_addr <= s_axi_awaddr;
+          aw_held <= '1';
         end if;
 
-        -- write data
-        do_write := false;
-        if wready_i = '0' and s_axi_wvalid = '1' then
-          wready_i <= '1';
-          do_write := true;
-        else
-          wready_i <= '0';
+        if wready_i = '1' and s_axi_wvalid = '1' then
+          wr_data <= s_axi_wdata;
+          wr_strb <= s_axi_wstrb;
+          w_held  <= '1';
         end if;
 
-        if do_write then
+        if bvalid_i = '1' then
+          if s_axi_bready = '1' then
+            bvalid_i <= '0';
+          end if;
+        elsif aw_held = '1' and w_held = '1' then
           case wr_addr(3 downto 2) is
-            when "00" => keys_reg <= s_axi_wdata(23 downto 0);
-            when "01" => ctrl_reg <= s_axi_wdata(0 downto 0);
+            when "00" =>
+              for lane in 0 to 2 loop
+                if wr_strb(lane) = '1' then
+                  keys_reg(lane * 8 + 7 downto lane * 8) <=
+                    wr_data(lane * 8 + 7 downto lane * 8);
+                end if;
+              end loop;
+            when "01" =>
+              if wr_strb(0) = '1' then
+                ctrl_reg <= wr_data(0 downto 0);
+              end if;
             when others => null;
           end case;
+          aw_held  <= '0';
+          w_held   <= '0';
           bvalid_i <= '1';
-        elsif bvalid_i = '1' and s_axi_bready = '1' then
-          bvalid_i <= '0';
         end if;
 
-        -- read
-        if arready_i = '0' and s_axi_arvalid = '1' then
-          arready_i <= '1';
+        if rvalid_i = '1' then
+          if s_axi_rready = '1' then
+            rvalid_i <= '0';
+          end if;
+        elsif arready_i = '1' and s_axi_arvalid = '1' then
           case s_axi_araddr(3 downto 2) is
             when "00"   => rdata_i <= x"00" & keys_reg;
             when "01"   => rdata_i <= (0 => ctrl_reg(0), others => '0');
@@ -137,11 +190,6 @@ begin
             when others => rdata_i <= (others => '0');
           end case;
           rvalid_i <= '1';
-        else
-          arready_i <= '0';
-          if rvalid_i = '1' and s_axi_rready = '1' then
-            rvalid_i <= '0';
-          end if;
         end if;
       end if;
     end if;

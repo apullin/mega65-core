@@ -36,6 +36,7 @@ endif
 # builds leave this empty; the KV260 build environment defines
 # KV260_VIDEO_DEFAULTS so Hyppo starts in PAL without CRT scanline emulation.
 HYPPO_DEFINES ?=
+HYPPO_CONFIG_STAMP = $(BINDIR)/.hyppo-build-config
 
 
 ifdef USE_LOCAL_OPHIS
@@ -1094,7 +1095,14 @@ $(BINDIR)/border.prg: 	$(SRCDIR)/border.a65 $(OPHIS_DEPEND)
 	$(OPHIS) $(OPHISOPT) $< -l $(BINDIR)/border.list -m $*.map -o $(BINDIR)/border.prg
 
 # ============================ done moved, print-warn, clean-target
-$(BINDIR)/HICKUP.M65: $(ACME_DEPEND) $(wildcard $(SRCDIR)/hyppo/*.asm) $(SRCDIR)/version.asm
+$(HYPPO_CONFIG_STAMP): FORCE
+	@mkdir -p $(BINDIR)
+	@tmp="$@.tmp"; \
+	  printf '%s\n' "DEBUG_HYPPO=$(DEBUG_HYPPO)" \
+	    "HYPPO_DEFINES=$(HYPPO_DEFINES)" > "$$tmp"; \
+	  if cmp -s "$$tmp" "$@"; then rm -f "$$tmp"; else mv -f "$$tmp" "$@"; fi
+
+$(BINDIR)/HICKUP.M65: $(ACME_DEPEND) $(wildcard $(SRCDIR)/hyppo/*.asm) $(SRCDIR)/version.asm $(HYPPO_CONFIG_STAMP)
 	$(ACME) --cpu m65 --setpc 0x8000 -l src/hyppo/HICKUP.sym -r src/hyppo/HICKUP.rep -I $(SRCDIR)/hyppo -DDEBUG_HYPPO=$(DEBUG_HYPPO) $(HYPPO_DEFINES) $(SRCDIR)/hyppo/main.asm
 
 $(BINDIR)/BRICKUP.M65: $(ACME_DEPEND) $(wildcard $(SRCDIR)/hyppo/*.asm) $(SRCDIR)/version.asm
@@ -1391,7 +1399,7 @@ $(BINDIR)/vncserver:	$(TOOLDIR)/vncserver.c
 	$(CC) $(COPT) -O3 -o $(BINDIR)/vncserver $(TOOLDIR)/vncserver.c -I/usr/local/include -lvncserver -lpthread
 
 clean:
-	rm -f $(BINDIR)/HICKUP.M65 hyppo.list hyppo.map
+	rm -f $(BINDIR)/HICKUP.M65 $(HYPPO_CONFIG_STAMP) hyppo.list hyppo.map
 	rm -f $(BINDIR)/diskmenu_c000.bin
 	rm -f $(UTILDIR)/*.list $(UTILDIR)/*.label $(UTILDIR)/*.map $(UTILDIR)/*.bin $(UTILDIR)/*.o
 	rm -f $(MFUTILDIR)/*.list $(MFUTILDIR)/*.label $(MFUTILDIR)/*.map $(MFUTILDIR)/*.bin $(MFUTILDIR)/*.o $(MFUTILDIR)/mf_screens*
