@@ -24,8 +24,9 @@
 --
 -- Register map (AXI4-Lite, 4 words):
 --   0x00  W   TX data      write a byte to send to the monitor
---   0x04  R   RX data      read a byte received from the monitor; clears RXVALID
---   0x08  R   STATUS       bit0 TXBUSY, bit1 RXVALID, bit2 RXOVERRUN
+--   0x04  R   RX data      pop one byte received from the monitor
+--   0x08  R   STATUS       bit0 TXBUSY, bit1 RXVALID, bit2 RXOVERRUN,
+--                         bits31:16 queued RX byte count
 --   0x0C  RW  CONTROL      bit0 write 1 to clear RXOVERRUN
 --------------------------------------------------------------------------------
 library IEEE;
@@ -35,7 +36,10 @@ use ieee.numeric_std.all;
 entity axi_monitor_bridge is
   generic (
     -- Clocks per bit. Must equal the monitor's (bit_rate_divisor + 1).
-    CLOCKS_PER_BIT : integer := 20
+    CLOCKS_PER_BIT : integer := 20;
+    -- A complete monitor dump can be hundreds of bytes.  Buffer one whole
+    -- burst in fabric so Linux scheduling latency cannot lose protocol bytes.
+    RX_FIFO_DEPTH : positive := 1024
   );
   port (
     -- AXI4-Lite slave
@@ -83,10 +87,13 @@ architecture rtl of axi_monitor_bridge is
   signal rx_shift   : std_logic_vector(7 downto 0) := (others => '0');
   signal rx_bitcnt  : integer range 0 to 8 := 0;
   signal rx_clkcnt  : integer range 0 to CLOCKS_PER_BIT-1 := 0;
-  signal rx_byte    : std_logic_vector(7 downto 0) := (others => '0');
-  signal rx_valid   : std_logic := '0';
   signal rx_overrun : std_logic := '0';
   signal rx_sync    : std_logic_vector(2 downto 0) := (others => '1');
+  type rx_fifo_t is array (natural range <>) of std_logic_vector(7 downto 0);
+  signal rx_fifo    : rx_fifo_t(0 to RX_FIFO_DEPTH-1);
+  signal rx_read_ptr  : integer range 0 to RX_FIFO_DEPTH-1 := 0;
+  signal rx_write_ptr : integer range 0 to RX_FIFO_DEPTH-1 := 0;
+  signal rx_count     : integer range 0 to RX_FIFO_DEPTH := 0;
 
   -- AXI handshake
   signal awready_i : std_logic := '0';
@@ -120,8 +127,10 @@ begin
   arready_i <= '1' when rvalid_i = '0' else '0';
 
   process (s_axi_aclk)
-    variable rx_arrived_now : boolean;
-    variable rx_read_now    : boolean;
+    variable rx_push_now      : boolean;
+    variable rx_pop_now       : boolean;
+    variable rx_push_accepted : boolean;
+    variable rx_push_byte     : std_logic_vector(7 downto 0);
   begin
     if rising_edge(s_axi_aclk) then
       if s_axi_aresetn = '0' then
@@ -129,17 +138,20 @@ begin
         tx_busy    <= '0';
         uart_tx    <= '1';
         rx_state   <= RX_IDLE;
-        rx_valid   <= '0';
         rx_overrun <= '0';
+        rx_read_ptr  <= 0;
+        rx_write_ptr <= 0;
+        rx_count     <= 0;
         aw_held    <= '0';
         w_held     <= '0';
         bvalid_i   <= '0';
         rvalid_i   <= '0';
         rx_sync    <= (others => '1');
       else
-        rx_arrived_now := false;
-        rx_read_now := arready_i = '1' and s_axi_arvalid = '1' and
-                       s_axi_araddr(3 downto 2) = "01";
+        rx_push_now := false;
+        rx_push_byte := (others => '0');
+        rx_pop_now := arready_i = '1' and s_axi_arvalid = '1' and
+                      s_axi_araddr(3 downto 2) = "01" and rx_count > 0;
 
         ----------------------------------------------------------------------
         -- UART transmit
@@ -201,12 +213,8 @@ begin
             if rx_clkcnt = CLOCKS_PER_BIT-1 then
               rx_clkcnt <= 0;
               rx_state  <= RX_IDLE;
-              rx_byte   <= rx_shift;
-              if rx_valid = '1' and not rx_read_now then
-                rx_overrun <= '1';            -- host did not keep up
-              end if;
-              rx_valid <= '1';
-              rx_arrived_now := true;
+              rx_push_now := true;
+              rx_push_byte := rx_shift;
             else
               rx_clkcnt <= rx_clkcnt + 1;
             end if;
@@ -262,19 +270,54 @@ begin
           rdata_i   <= (others => '0');
           case s_axi_araddr(3 downto 2) is
             when "01" =>                       -- 0x04 RX data
-              rdata_i(7 downto 0) <= rx_byte;
-              -- If a fresh UART byte completed on this same edge, return the
-              -- previous byte and leave the new one pending for the next read.
-              if not rx_arrived_now then
-                rx_valid <= '0';
+              if rx_count > 0 then
+                rdata_i(7 downto 0) <= rx_fifo(rx_read_ptr);
               end if;
             when "10" =>                       -- 0x08 STATUS
               rdata_i(0) <= tx_busy;
-              rdata_i(1) <= rx_valid;
+              if rx_count > 0 then
+                rdata_i(1) <= '1';
+              else
+                rdata_i(1) <= '0';
+              end if;
               rdata_i(2) <= rx_overrun;
+              rdata_i(31 downto 16) <=
+                std_logic_vector(to_unsigned(rx_count, 16));
             when others => null;
           end case;
           rvalid_i <= '1';
+        end if;
+
+        ----------------------------------------------------------------------
+        -- Receive FIFO update.  Pop and push may happen on the same clock;
+        -- when full, that simultaneous exchange is still lossless.
+        ----------------------------------------------------------------------
+        rx_push_accepted := rx_push_now and
+                            (rx_count < RX_FIFO_DEPTH or rx_pop_now);
+
+        if rx_pop_now then
+          if rx_read_ptr = RX_FIFO_DEPTH-1 then
+            rx_read_ptr <= 0;
+          else
+            rx_read_ptr <= rx_read_ptr + 1;
+          end if;
+        end if;
+
+        if rx_push_accepted then
+          rx_fifo(rx_write_ptr) <= rx_push_byte;
+          if rx_write_ptr = RX_FIFO_DEPTH-1 then
+            rx_write_ptr <= 0;
+          else
+            rx_write_ptr <= rx_write_ptr + 1;
+          end if;
+        elsif rx_push_now then
+          rx_overrun <= '1';
+        end if;
+
+        if rx_push_accepted and not rx_pop_now then
+          rx_count <= rx_count + 1;
+        elsif rx_pop_now and not rx_push_accepted then
+          rx_count <= rx_count - 1;
         end if;
 
       end if;
