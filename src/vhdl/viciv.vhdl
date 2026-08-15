@@ -288,7 +288,13 @@ architecture Behavioral of viciv is
   signal pixel_alpha : unsigned(7 downto 0) := x"00";
 
   -- Select which of the four video modes to use at any point in time.
-  signal vicii_ntsc : std_logic := '1';
+  -- Default to PAL, not NTSC.  NTSC was never a deliberate choice for this
+  -- port -- it is simply what the core defaults to, and the whole video path
+  -- got built around it by accident.  Almost all C64/C65 software is PAL, and
+  -- PAL demos fail hard on NTSC because their raster code assumes 312 lines at
+  -- 50 Hz.  Booting PAL also removes the need to switch at runtime, which
+  -- currently requires POKEs that cannot be delivered reliably.
+  signal vicii_ntsc : std_logic := '0';
   signal vga60_select_internal : std_logic := '0';
 
   -- Video mode definition
