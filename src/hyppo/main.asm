@@ -1605,12 +1605,18 @@ resetdisplay:
         sta $D021       ;; background
         sta $D711         ;; Disable DMA audio
 
-        ;; Start in 60Hz mode, since most monitors support it
-        ;; (Also required to make sure matrix mode pixels aren't ragged on first boot).
+        ;; The KV260 port is driven through a PAL-capable DisplayPort mode and
+        ;; primarily runs PAL C64/C65 software.  Its build defines
+        ;; KV260_VIDEO_DEFAULTS so Hyppo does not overwrite VIC-IV's PAL reset
+        ;; value with the usual broadly-compatible 60Hz default.
         ;; The label here is used so that the syspartition settings can be used to
         ;; change the default video mode on reset.
 pal_ntsc_minus_1:
+!ifdef KV260_VIDEO_DEFAULTS {
+        lda #$00
+} else {
         lda #$80
+}
         sta $d06f
 
         ;; disable test pattern and various other strange video things that might be hanging around
@@ -1648,9 +1654,15 @@ pal_ntsc_minus_1:
 
         ;; Now switch to 16-bit text mode so that we can use proportional
         ;; characters and full-colour characters for chars >$FF for the logo
-        ;; Also enable CRT emulation by default.
+        ;; KV260 also leaves CRT/PAL scanline emulation off by default.  It is
+        ;; useful on a CRT but looks striped/celled on a progressive DisplayPort
+        ;; path.  A system-partition setting can still enable it explicitly.
         ;;
+!ifdef KV260_VIDEO_DEFAULTS {
+        lda #$c5
+} else {
         lda #$e5
+}
         sta $d054        ;; VIC-IV Control Register C
 
         ;; and 80 bytes (40 16-bit characters) per row.

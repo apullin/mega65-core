@@ -32,6 +32,11 @@ ifndef DEBUG_HYPPO
 	DEBUG_HYPPO= 0
 endif
 
+# Extra ACME definitions for platform-specific Hyppo defaults.  Ordinary core
+# builds leave this empty; the KV260 build environment defines
+# KV260_VIDEO_DEFAULTS so Hyppo starts in PAL without CRT scanline emulation.
+HYPPO_DEFINES ?=
+
 
 ifdef USE_LOCAL_OPHIS
 	# use locally installed binary (requires 'ophis' to be in the $PATH)
@@ -1090,7 +1095,7 @@ $(BINDIR)/border.prg: 	$(SRCDIR)/border.a65 $(OPHIS_DEPEND)
 
 # ============================ done moved, print-warn, clean-target
 $(BINDIR)/HICKUP.M65: $(ACME_DEPEND) $(wildcard $(SRCDIR)/hyppo/*.asm) $(SRCDIR)/version.asm
-	$(ACME) --cpu m65 --setpc 0x8000 -l src/hyppo/HICKUP.sym -r src/hyppo/HICKUP.rep -I $(SRCDIR)/hyppo -DDEBUG_HYPPO=$(DEBUG_HYPPO) $(SRCDIR)/hyppo/main.asm
+	$(ACME) --cpu m65 --setpc 0x8000 -l src/hyppo/HICKUP.sym -r src/hyppo/HICKUP.rep -I $(SRCDIR)/hyppo -DDEBUG_HYPPO=$(DEBUG_HYPPO) $(HYPPO_DEFINES) $(SRCDIR)/hyppo/main.asm
 
 $(BINDIR)/BRICKUP.M65: $(ACME_DEPEND) $(wildcard $(SRCDIR)/hyppo/*.asm) $(SRCDIR)/version.asm
 	$(ACME) --cpu m65 --setpc 0x8000 -l src/hyppo/HICKUP.sym -r src/hyppo/HICKUP.rep -I $(SRCDIR)/hyppo -DDEBUG_HYPPO=$(DEBUG_HYPPO) $(SRCDIR)/hyppo/joyflash.asm
