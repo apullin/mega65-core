@@ -107,9 +107,15 @@ entity sdcardio is
 
     virtualise_f011_drive0 : in std_logic;
     virtualise_f011_drive1 : in std_logic;
-    -- Host-side image metadata.  These are additive to the hypervisor-owned
-    -- $D68A flags, so the original path remains authoritative and compatible.
+    -- Host-side image metadata.  While a drive is externally virtualised, the
+    -- host owns its media-present and write-protect state; image enable is
+    -- implied by virtualisation.  Format is host-owned in the same state, so a
+    -- hot swap can change in either direction instead of an old Hyppo D64 bit
+    -- preventing a later D81 from taking effect.
+    external_virtualise_f011 : in std_logic_vector(1 downto 0) := "00";
+    external_media_present_f011 : in std_logic_vector(1 downto 0) := "00";
     external_d64_f011 : in std_logic_vector(1 downto 0) := "00";
+    external_write_protect_f011 : in std_logic_vector(1 downto 0) := "00";
     external_disk_changed : in std_logic := '0';
 
     colourram_at_dc00 : in std_logic;
@@ -347,6 +353,8 @@ architecture behavioural of sdcardio is
   signal diskimage2_sector : unsigned(31 downto 0) := x"ffffffff";
   signal diskimage1_enable : std_logic := '0';
   signal diskimage2_enable : std_logic := '0';
+  signal diskimage1_enable_effective : std_logic := '0';
+  signal diskimage2_enable_effective : std_logic := '0';
   signal diskimage1_offset : unsigned(16 downto 0);
   signal diskimage2_offset : unsigned(16 downto 0);
   signal f011_track : unsigned(7 downto 0) := x"01";
@@ -403,6 +411,8 @@ architecture behavioural of sdcardio is
   signal f011_disk_present : std_logic := '0';
   signal f011_disk1_present : std_logic := '0';
   signal f011_disk2_present : std_logic := '0';
+  signal f011_disk1_present_effective : std_logic := '0';
+  signal f011_disk2_present_effective : std_logic := '0';
   signal f011_over_index : std_logic := '0';
   signal f011_disk_changed : std_logic := '0';
 
@@ -412,6 +422,8 @@ architecture behavioural of sdcardio is
   signal f011_write_protected : std_logic := '0';
   signal f011_disk1_write_protected : std_logic := '0';
   signal f011_disk2_write_protected : std_logic := '0';
+  signal f011_disk1_write_protected_effective : std_logic := '0';
+  signal f011_disk2_write_protected_effective : std_logic := '0';
   signal f011_mega_disk : std_logic := '0';
   signal f011_mega_disk2 : std_logic := '0';
   signal f011_d64_disk : std_logic := '0';
@@ -695,10 +707,23 @@ architecture behavioural of sdcardio is
 
 begin  -- behavioural
 
-  -- Linux can describe the mounted host image without taking away anything
-  -- written by Hyppo.  Either source saying D64 is sufficient.
-  f011_d64_disk_effective <= f011_d64_disk or external_d64_f011(0);
-  f011_d64_disk2_effective <= f011_d64_disk2 or external_d64_f011(1);
+  -- The agent serving an externally virtualised drive owns its complete media
+  -- description.  When virtualisation is off, Hyppo's original registers are
+  -- authoritative exactly as before.
+  f011_d64_disk_effective <= external_d64_f011(0)
+    when external_virtualise_f011(0) = '1' else f011_d64_disk;
+  f011_d64_disk2_effective <= external_d64_f011(1)
+    when external_virtualise_f011(1) = '1' else f011_d64_disk2;
+  diskimage1_enable_effective <= diskimage1_enable or external_virtualise_f011(0);
+  diskimage2_enable_effective <= diskimage2_enable or external_virtualise_f011(1);
+  f011_disk1_present_effective <= external_media_present_f011(0)
+    when external_virtualise_f011(0) = '1' else f011_disk1_present;
+  f011_disk2_present_effective <= external_media_present_f011(1)
+    when external_virtualise_f011(1) = '1' else f011_disk2_present;
+  f011_disk1_write_protected_effective <= external_write_protect_f011(0)
+    when external_virtualise_f011(0) = '1' else f011_disk1_write_protected;
+  f011_disk2_write_protected_effective <= external_write_protect_f011(1)
+    when external_virtualise_f011(1) = '1' else f011_disk2_write_protected;
 
 --**********************************************************************
   -- SD card controller module.
@@ -1039,9 +1064,10 @@ begin  -- behavioural
            sd_state,f011_irqenable,f011_ds,f011_cmd,f011_busy,f011_crc,
            f011_track0,f011_rsector_found,f011_over_index,
            sdhc_mode,sd_datatoken, sd_rdata,
-           diskimage1_enable,f011_disk1_present,
-           f011_disk1_write_protected,diskimage2_enable,f011_disk2_present,
-           f011_disk2_write_protected,diskimage_sector,diskimage2_sector,sw,btn,aclmiso,
+           diskimage1_enable_effective,f011_disk1_present_effective,
+           f011_disk1_write_protected_effective,diskimage2_enable_effective,
+           f011_disk2_present_effective,f011_disk2_write_protected_effective,
+           diskimage_sector,diskimage2_sector,sw,btn,aclmiso,
            aclmosiinternal,aclssinternal,aclSCKinternal,aclint1,aclint2,
            tmpsdainternal,tmpsclinternal,tmpint,tmpct,tmpint,last_scan_code,
            pcm_left,
@@ -1336,12 +1362,12 @@ begin  -- behavioural
           when x"8b" =>
             -- BG the description seems in conflict with the assignment in the write section (below)
             -- @IO:GS $D68B - Diskimage control flags
-            fastio_rdata(0) <= diskimage1_enable;
-            fastio_rdata(1) <= f011_disk1_present;
-            fastio_rdata(2) <= not f011_disk1_write_protected;
-            fastio_rdata(3) <= diskimage2_enable;
-            fastio_rdata(4) <= f011_disk2_present;
-            fastio_rdata(5) <= not f011_disk2_write_protected;
+            fastio_rdata(0) <= diskimage1_enable_effective;
+            fastio_rdata(1) <= f011_disk1_present_effective;
+            fastio_rdata(2) <= not f011_disk1_write_protected_effective;
+            fastio_rdata(3) <= diskimage2_enable_effective;
+            fastio_rdata(4) <= f011_disk2_present_effective;
+            fastio_rdata(5) <= not f011_disk2_write_protected_effective;
             -- @IO:GS $D68B.6 F011:MDISK0 Enable D65 ``MEGA Disk'' for F011 emulated drive 0
             -- @IO:GS $D68B.7 F011:MDISK0 Enable D65 ``MEGA Disk'' for F011 emulated drive 1
             fastio_rdata(6) <= f011_mega_disk;
@@ -2145,11 +2171,11 @@ begin  -- behavioural
         f011_disk_present <= '1';
         f011_write_protected <= not f_writeprotect;
       elsif f011_ds="000" then
-        f011_write_protected <= f011_disk1_write_protected;
-        f011_disk_present <= f011_disk1_present;
+        f011_write_protected <= f011_disk1_write_protected_effective;
+        f011_disk_present <= f011_disk1_present_effective;
       elsif f011_ds="001" then
-        f011_write_protected <= f011_disk2_write_protected;
-        f011_disk_present <= f011_disk2_present;
+        f011_write_protected <= f011_disk2_write_protected_effective;
+        f011_disk_present <= f011_disk2_present_effective;
       end if;
 
       if use_real_floppy0='1' and f011_ds="000" then
@@ -2564,10 +2590,10 @@ begin  -- behavioural
 
                     sd_state <= FDCReadingSectorWait;
                   else
-                    if f011_ds="000" and (f011_disk1_present='0' or diskimage1_enable='0') then
+                    if f011_ds="000" and (f011_disk1_present_effective='0' or diskimage1_enable_effective='0') then
                       f011_rnf <= '1';
                       report "Drive 0 selected, but not mounted.";
-                    elsif f011_ds="001" and (f011_disk2_present='0' or diskimage2_enable='0') then
+                    elsif f011_ds="001" and (f011_disk2_present_effective='0' or diskimage2_enable_effective='0') then
                       f011_rnf <= '1';
                       report "Drive 1 selected, but not mounted.";
                     elsif f011_ds(2 downto 1) /= x"00" then
@@ -2623,15 +2649,15 @@ begin  -- behavioural
                   sb_cpu_read_request <= '1';
                   f011_buffer_disk_address <= (others => '0');
 
-                  if f011_ds="000" and ((diskimage1_enable or use_real_floppy0)='0'
-                                        or (f011_disk1_present or use_real_floppy0) ='0'
-                                        or (f011_disk1_present ='1' and use_real_floppy0 = '0' and f011_disk1_write_protected='1'))
+                  if f011_ds="000" and ((diskimage1_enable_effective or use_real_floppy0)='0'
+                                        or (f011_disk1_present_effective or use_real_floppy0) ='0'
+                                        or (f011_disk1_present_effective ='1' and use_real_floppy0 = '0' and f011_disk1_write_protected_effective='1'))
                                         then
                     f011_rnf <= '1';
                     report "Drive 0 selected, but not mounted.";
-                  elsif f011_ds="001" and ((diskimage2_enable or use_real_floppy2)='0'
-                                        or (f011_disk2_present or use_real_floppy2) ='0'
-                                        or (f011_disk2_present ='1' and use_real_floppy2 = '0' and f011_disk2_write_protected='1'))
+                  elsif f011_ds="001" and ((diskimage2_enable_effective or use_real_floppy2)='0'
+                                        or (f011_disk2_present_effective or use_real_floppy2) ='0'
+                                        or (f011_disk2_present_effective ='1' and use_real_floppy2 = '0' and f011_disk2_write_protected_effective='1'))
                                         then
                     f011_rnf <= '1';
                     report "Drive 1 selected, but not mounted.";

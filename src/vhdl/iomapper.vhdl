@@ -34,7 +34,10 @@ entity iomapper is
 
         protected_hardware_in : in unsigned(7 downto 0);
         virtualised_hardware_in : in unsigned(7 downto 0);
+        axi_virt_f011_in : in std_logic_vector(1 downto 0) := "00";
+        axi_media_present_f011_in : in std_logic_vector(1 downto 0) := "00";
         axi_d64_f011_in : in std_logic_vector(1 downto 0) := "00";
+        axi_write_protect_f011_in : in std_logic_vector(1 downto 0) := "00";
         axi_disk_changed_f011_in : in std_logic := '0';
         pal_mode : in std_logic;
         -- Enables for the various chip select lines
@@ -1602,7 +1605,10 @@ begin
     hyper_trap_f011_write => hyper_trap_f011_write,
     virtualise_f011_drive0 => virtualised_hardware_in(0),
     virtualise_f011_drive1 => virtualised_hardware_in(1),
+    external_virtualise_f011 => axi_virt_f011_in,
+    external_media_present_f011 => axi_media_present_f011_in,
     external_d64_f011 => axi_d64_f011_in,
+    external_write_protect_f011 => axi_write_protect_f011_in,
     external_disk_changed => axi_disk_changed_f011_in,
     secure_mode => protected_hardware_in(7),
 

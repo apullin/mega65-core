@@ -76,7 +76,9 @@ architecture Behavioral of kv260_top is
       mon_uart_tx             : out std_logic;
       mon_uart_rx             : in  std_logic;
       axi_virt_f011           : out std_logic_vector(1 downto 0);
+      axi_media_present_f011  : out std_logic_vector(1 downto 0);
       axi_d64_f011            : out std_logic_vector(1 downto 0);
+      axi_write_protect_f011  : out std_logic_vector(1 downto 0);
       axi_disk_changed_f011   : out std_logic;
       vkbd_key1               : out std_logic_vector(7 downto 0);
       vkbd_key2               : out std_logic_vector(7 downto 0);
@@ -90,7 +92,9 @@ architecture Behavioral of kv260_top is
   -- Remote keyboard bytes from the PS-driven virtual_keyboard_axi slave.
   -- F011 virtualisation asserted from Linux, via the f011_ctrl_axi slave.
   signal axi_virt_f011 : std_logic_vector(1 downto 0);
+  signal axi_media_present_f011 : std_logic_vector(1 downto 0);
   signal axi_d64_f011 : std_logic_vector(1 downto 0);
+  signal axi_write_protect_f011 : std_logic_vector(1 downto 0);
   signal axi_disk_changed_f011 : std_logic;
 
   signal vkbd_key1 : std_logic_vector(7 downto 0);
@@ -179,7 +183,9 @@ begin
       mon_uart_tx             => mon_uart_tx,
       mon_uart_rx             => mon_uart_rx,
       axi_virt_f011           => axi_virt_f011,
+      axi_media_present_f011  => axi_media_present_f011,
       axi_d64_f011            => axi_d64_f011,
+      axi_write_protect_f011  => axi_write_protect_f011,
       axi_disk_changed_f011   => axi_disk_changed_f011,
       vkbd_key1               => vkbd_key1,
       vkbd_key2               => vkbd_key2,
@@ -241,7 +247,9 @@ begin
       -- the combined RESTORE input low.
       restore_key => restore_key and vkbd_restore,
       axi_virt_f011 => axi_virt_f011,
+      axi_media_present_f011 => axi_media_present_f011,
       axi_d64_f011 => axi_d64_f011,
+      axi_write_protect_f011 => axi_write_protect_f011,
       axi_disk_changed_f011 => axi_disk_changed_f011,
       vkbd_key1   => unsigned(vkbd_key1),
       vkbd_key2   => unsigned(vkbd_key2),

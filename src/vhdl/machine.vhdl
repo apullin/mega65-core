@@ -215,7 +215,9 @@ entity machine is
          -- Linux over AXI).  OR-ed with the hypervisor's own bits, so $D659
          -- keeps working exactly as before and this can only add.
          axi_virt_f011 : in std_logic_vector(1 downto 0) := "00";
+         axi_media_present_f011 : in std_logic_vector(1 downto 0) := "00";
          axi_d64_f011  : in std_logic_vector(1 downto 0) := "00";
+         axi_write_protect_f011 : in std_logic_vector(1 downto 0) := "00";
          axi_disk_changed_f011 : in std_logic := '0';
 
          remote_key1 : in unsigned(7 downto 0) := x"FF";
@@ -1661,7 +1663,10 @@ begin
       cpu_slow => cpu_slow,
       protected_hardware_in => protected_hardware_sig,
       virtualised_hardware_in => virtualised_hardware_ored,
+      axi_virt_f011_in => axi_virt_f011,
+      axi_media_present_f011_in => axi_media_present_f011,
       axi_d64_f011_in => axi_d64_f011,
+      axi_write_protect_f011_in => axi_write_protect_f011,
       axi_disk_changed_f011_in => axi_disk_changed_f011,
       chipselect_enables => chipselect_enables,
       matrix_mode_trap => matrix_trap,

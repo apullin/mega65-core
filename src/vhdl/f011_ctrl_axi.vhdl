@@ -23,8 +23,12 @@
 -- Register map (AXI4-Lite):
 --   0x00  RW  CTRL   [0] virtualise drive 0
 --                    [1] virtualise drive 1
+--                    [2] drive 0 media present
+--                    [3] drive 1 media present
 --                    [4] drive 0 image is a 1541 (.d64) rather than a 1581
 --                    [5] drive 1 image is a 1541
+--                    [6] drive 0 write protected
+--                    [7] drive 1 write protected
 --   0x04  W   EVENT  [0] write 1 to pulse "disk has been changed" at the core,
 --                        so the guest re-reads the BAM after a swap.  Reads
 --                        back the last value written.
@@ -62,7 +66,9 @@ entity f011_ctrl_axi is
     core_clk      : in  std_logic;
     -- One bus rather than two bits, so the block design carries a single port.
     virt_drive0_bus : out std_logic_vector(1 downto 0) := "00";
+    media_present_bus : out std_logic_vector(1 downto 0) := "00";
     d64_bus       : out std_logic_vector(1 downto 0) := "00";
+    write_protect_bus : out std_logic_vector(1 downto 0) := "00";
     disk_changed  : out std_logic := '0'    -- one core_clk pulse
   );
 end f011_ctrl_axi;
@@ -114,7 +120,9 @@ begin
   arready_i <= '1' when rvalid_i = '0' else '0';
 
   virt_drive0_bus <= ctrl_core(1 downto 0);
+  media_present_bus <= ctrl_core(3 downto 2);
   d64_bus <= ctrl_core(5) & ctrl_core(4);
+  write_protect_bus <= ctrl_core(7 downto 6);
 
   process (core_clk)
   begin

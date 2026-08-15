@@ -117,7 +117,9 @@ entity container is
     -- F011 virtualisation, asserted from Linux over AXI.  See
     -- f011_ctrl_axi.vhdl for why this exists rather than going through $D659.
     axi_virt_f011 : in std_logic_vector(1 downto 0) := "00";
+    axi_media_present_f011 : in std_logic_vector(1 downto 0) := "00";
     axi_d64_f011 : in std_logic_vector(1 downto 0) := "00";
+    axi_write_protect_f011 : in std_logic_vector(1 downto 0) := "00";
     axi_disk_changed_f011 : in std_logic := '0';
 
     vkbd_key1 : in unsigned(7 downto 0) := x"FF";
@@ -360,7 +362,9 @@ begin
     )
     port map (
       axi_virt_f011 => axi_virt_f011,
+      axi_media_present_f011 => axi_media_present_f011,
       axi_d64_f011 => axi_d64_f011,
+      axi_write_protect_f011 => axi_write_protect_f011,
       axi_disk_changed_f011 => axi_disk_changed_f011,
       pixelclock           => pixelclock,
       cpuclock             => cpuclock,
