@@ -84,6 +84,8 @@ architecture Behavioral of kv260_top is
       vkbd_key2               : out std_logic_vector(7 downto 0);
       vkbd_key3               : out std_logic_vector(7 downto 0);
       vkbd_restore            : out std_logic;
+      vkbd_joya               : out std_logic_vector(4 downto 0);
+      vkbd_joyb               : out std_logic_vector(4 downto 0);
       pl_clk0                 : out std_logic;
       pl_resetn0              : out std_logic
     );
@@ -101,6 +103,8 @@ architecture Behavioral of kv260_top is
   signal vkbd_key2 : std_logic_vector(7 downto 0);
   signal vkbd_key3 : std_logic_vector(7 downto 0);
   signal vkbd_restore : std_logic;
+  signal vkbd_joya : std_logic_vector(4 downto 0);
+  signal vkbd_joyb : std_logic_vector(4 downto 0);
 
   -- AXI-attached debug transport for the MEGA65 serial monitor.
   signal mon_uart_tx : std_logic;   -- from the AXI UART, into the monitor
@@ -191,6 +195,8 @@ begin
       vkbd_key2               => vkbd_key2,
       vkbd_key3               => vkbd_key3,
       vkbd_restore            => vkbd_restore,
+      vkbd_joya               => vkbd_joya,
+      vkbd_joyb               => vkbd_joyb,
       pl_clk0                 => pl_clk0,
       pl_resetn0              => pl_resetn0
     );
@@ -254,6 +260,8 @@ begin
       vkbd_key1   => unsigned(vkbd_key1),
       vkbd_key2   => unsigned(vkbd_key2),
       vkbd_key3   => unsigned(vkbd_key3),
+      vjoy_a      => vkbd_joya,
+      vjoy_b      => vkbd_joyb,
       porta_pins  => porta_pins,
       portb_pins  => portb_pins,
 

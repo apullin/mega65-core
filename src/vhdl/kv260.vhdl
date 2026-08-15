@@ -125,6 +125,8 @@ entity container is
     vkbd_key1 : in unsigned(7 downto 0) := x"FF";
     vkbd_key2 : in unsigned(7 downto 0) := x"FF";
     vkbd_key3 : in unsigned(7 downto 0) := x"FF";
+    vjoy_a : in std_logic_vector(4 downto 0) := (others => '1');
+    vjoy_b : in std_logic_vector(4 downto 0) := (others => '1');
 
     ------------------------------------------------------------------------
     -- SD card, SPI mode (PMOD).
@@ -430,16 +432,16 @@ begin
       remote_key1       => vkbd_key1,
       remote_key2       => vkbd_key2,
       remote_key3       => vkbd_key3,
-      fa_fire           => '1',
-      fa_up             => '1',
-      fa_left           => '1',
-      fa_down           => '1',
-      fa_right          => '1',
-      fb_fire           => '1',
-      fb_up             => '1',
-      fb_left           => '1',
-      fb_down           => '1',
-      fb_right          => '1',
+      fa_fire           => vjoy_a(4),
+      fa_up             => vjoy_a(0),
+      fa_left           => vjoy_a(2),
+      fa_down           => vjoy_a(1),
+      fa_right          => vjoy_a(3),
+      fb_fire           => vjoy_b(4),
+      fb_up             => vjoy_b(0),
+      fb_left           => vjoy_b(2),
+      fb_down           => vjoy_b(1),
+      fb_right          => vjoy_b(3),
       fa_potx           => '0',
       fa_poty           => '0',
       fb_potx           => '0',
