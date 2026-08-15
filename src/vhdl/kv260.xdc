@@ -84,17 +84,17 @@ set_property -dict {PACKAGE_PIN A12 IOSTANDARD LVCMOS33 PULLUP TRUE} [get_ports 
 ## ---------------------------------------------------------------------------
 
 ## ---------------------------------------------------------------------------
-## Remote keyboard clock crossing.
+## Virtual keyboard and joystick clock crossing.
 ##
-## The virtual keyboard's three "currently pressed" matrix positions are written
-## by the PS on the 100 MHz AXI clock and passed through two core-clocked
-## synchronizer stages before the keyboard scanner sees them.  A key is held for
-## tens of milliseconds, so independent bit synchronizers are sufficient; the
-## datapath bound keeps each first-stage crossing short as well.
+## The virtual keyboard and joystick state is written by the PS on the 100 MHz
+## AXI clock and passed through two core-clocked synchronizer stages before the
+## keyboard scanner sees it.  Inputs are held for milliseconds, so independent
+## bit synchronizers are sufficient; the datapath bound keeps each first-stage
+## crossing short as well.
 ##
 ## Bound the datapath rather than declaring a false path: that still holds
-## bit-to-bit skew well under a scan interval, so a scan can never latch a
-## half-updated position and synthesise a key nobody pressed.
+## bit-to-bit skew well under a core-clock interval, so the stability filter
+## cannot accept a half-updated key or joystick vector.
 ## ---------------------------------------------------------------------------
 ## Kept as a single flat statement on purpose.  Wrapping this in an "if" that
 ## checked the cells existed looked safer but was not: Vivado rewrites XDC when
@@ -104,9 +104,11 @@ set_property -dict {PACKAGE_PIN A12 IOSTANDARD LVCMOS33 PULLUP TRUE} [get_ports 
 ## the routed checkpoint gave slack +1.899 with requirement 10.000, which is how
 ## the flat form was confirmed to be the working one.  During synthesis the
 ## block design is a black box so this matches nothing and merely warns; at
-## implementation it matches the 24 key registers.
+## implementation these match the 24 key, one RESTORE and ten joystick source
+## registers respectively.
 set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *vkbd/inst/keys_reg_reg*}]
 set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *vkbd/inst/ctrl_reg_reg*}]
+set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *vkbd/inst/joys_reg_reg*}]
 
 
 ## ---------------------------------------------------------------------------
