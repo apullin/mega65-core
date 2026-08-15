@@ -59,13 +59,16 @@ set_property -dict {PACKAGE_PIN D10 IOSTANDARD LVCMOS33} [get_ports uart_txd] ;#
 set_property -dict {PACKAGE_PIN C11 IOSTANDARD LVCMOS33 PULLUP TRUE} [get_ports rsrx] ;# som240_1_d22
 
 ## ---------------------------------------------------------------------------
-## Audio (PWM) and status
+## Audio (PWM), status and cooling
 ## ---------------------------------------------------------------------------
 set_property -dict {PACKAGE_PIN J11 IOSTANDARD LVCMOS33} [get_ports pwm_l]        ;# som240_1_d18
 set_property -dict {PACKAGE_PIN J10 IOSTANDARD LVCMOS33} [get_ports pwm_r]        ;# som240_1_b17
 set_property -dict {PACKAGE_PIN K13 IOSTANDARD LVCMOS33} [get_ports led]          ;# som240_1_b18
 set_property -dict {PACKAGE_PIN F11 IOSTANDARD LVCMOS33 PULLUP TRUE} [get_ports reset_button] ;# som240_1_a15
-set_property -dict {PACKAGE_PIN A12 IOSTANDARD LVCMOS33 PULLUP TRUE} [get_ports restore_key] ;# som240_1_c24
+# The KV260 fan gate is SOM240_1 C24 / package A12.  The PS TTC0 channel-2
+# waveout reaches this port through EMIO, preserving Ubuntu's stock thermal
+# policy.  A12 is not a user RESTORE key.
+set_property -dict {PACKAGE_PIN A12 IOSTANDARD LVCMOS33 DRIVE 8 SLEW SLOW} [get_ports fan_en] ;# som240_1_c24
 
 ## ---------------------------------------------------------------------------
 ## Keyboard (CIA1 matrix) has no pins on this board.

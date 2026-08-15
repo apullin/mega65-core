@@ -34,10 +34,11 @@ entity kv260_top is
     pwm_l : out std_logic;
     pwm_r : out std_logic;
 
-    -- Status / control
+    -- Status / control.  fan_en is the PS TTC0 channel-2 waveform used by
+    -- Ubuntu's stock thermal fan policy; the carrier routes it to package A12.
     led          : out std_logic;
     reset_button : in  std_logic;
-    restore_key  : in  std_logic
+    fan_en       : out std_logic
   );
 end kv260_top;
 
@@ -86,6 +87,7 @@ architecture Behavioral of kv260_top is
       vkbd_restore            : out std_logic;
       vkbd_joya               : out std_logic_vector(4 downto 0);
       vkbd_joyb               : out std_logic_vector(4 downto 0);
+      emio_ttc0_wave_o        : out std_logic_vector(2 downto 0);
       pl_clk0                 : out std_logic;
       pl_resetn0              : out std_logic
     );
@@ -105,6 +107,7 @@ architecture Behavioral of kv260_top is
   signal vkbd_restore : std_logic;
   signal vkbd_joya : std_logic_vector(4 downto 0);
   signal vkbd_joyb : std_logic_vector(4 downto 0);
+  signal emio_ttc0_wave_o : std_logic_vector(2 downto 0);
 
   -- AXI-attached debug transport for the MEGA65 serial monitor.
   signal mon_uart_tx : std_logic;   -- from the AXI UART, into the monitor
@@ -197,9 +200,14 @@ begin
       vkbd_restore            => vkbd_restore,
       vkbd_joya               => vkbd_joya,
       vkbd_joyb               => vkbd_joyb,
+      emio_ttc0_wave_o        => emio_ttc0_wave_o,
       pl_clk0                 => pl_clk0,
       pl_resetn0              => pl_resetn0
     );
+
+  -- Linux's pwm-fan device uses TTC0 channel 2.  Pass that PS waveform to the
+  -- carrier fan gate unchanged so the distro thermal curve remains in charge.
+  fan_en <= emio_ttc0_wave_o(2);
 
   ----------------------------------------------------------------------------
   -- The MEGA65 serial monitor gets two transports at once: the physical pins
@@ -248,10 +256,10 @@ begin
       audio_left  => audio_left,
       audio_right => audio_right,
 
-      -- Both sources are active low.  The physical pin normally sits high on
-      -- its pull-up; Page Up through the AXI keyboard can independently pull
-      -- the combined RESTORE input low.
-      restore_key => restore_key and vkbd_restore,
+      -- This carrier has no physical RESTORE input.  Package pin A12 is the
+      -- fan gate, so RESTORE comes exclusively from the active-low AXI
+      -- keyboard control (Page Up in the host daemon).
+      restore_key => vkbd_restore,
       axi_virt_f011 => axi_virt_f011,
       axi_media_present_f011 => axi_media_present_f011,
       axi_d64_f011 => axi_d64_f011,
