@@ -2648,16 +2648,37 @@ begin  -- behavioural
                   sb_cpu_read_request <= '1';
                   f011_buffer_disk_address <= (others => '0');
 
-                  if f011_ds="000" and ((diskimage1_enable_effective or use_real_floppy0)='0'
-                                        or (f011_disk1_present_effective or use_real_floppy0) ='0'
-                                        or (f011_disk1_present_effective ='1' and use_real_floppy0 = '0' and f011_disk1_write_protected_effective='1'))
-                                        then
+                  -- An externally virtualised drive owns its complete media
+                  -- state, even on boards where the corresponding physical
+                  -- drive-enable flag defaults high.  In particular,
+                  -- use_real_floppy2 defaults to '1'; allowing it to mask the
+                  -- external state made writable drive 1 set BUSY forever
+                  -- without entering HyperTrapWrite, and also bypassed its
+                  -- write-protect rejection.
+                  if f011_ds="000" and virtualise_f011_drive0='1'
+                    and (f011_disk1_present_effective='0'
+                         or f011_disk1_write_protected_effective='1') then
+                    f011_rnf <= '1';
+                    report "Virtual drive 0 is absent or write protected.";
+                  elsif f011_ds="001" and virtualise_f011_drive1='1'
+                    and (f011_disk2_present_effective='0'
+                         or f011_disk2_write_protected_effective='1') then
+                    f011_rnf <= '1';
+                    report "Virtual drive 1 is absent or write protected.";
+                  elsif f011_ds="000" and virtualise_f011_drive0='0'
+                    and ((diskimage1_enable_effective or use_real_floppy0)='0'
+                         or (f011_disk1_present_effective or use_real_floppy0)='0'
+                         or (f011_disk1_present_effective='1'
+                             and use_real_floppy0='0'
+                             and f011_disk1_write_protected_effective='1')) then
                     f011_rnf <= '1';
                     report "Drive 0 selected, but not mounted.";
-                  elsif f011_ds="001" and ((diskimage2_enable_effective or use_real_floppy2)='0'
-                                        or (f011_disk2_present_effective or use_real_floppy2) ='0'
-                                        or (f011_disk2_present_effective ='1' and use_real_floppy2 = '0' and f011_disk2_write_protected_effective='1'))
-                                        then
+                  elsif f011_ds="001" and virtualise_f011_drive1='0'
+                    and ((diskimage2_enable_effective or use_real_floppy2)='0'
+                         or (f011_disk2_present_effective or use_real_floppy2)='0'
+                         or (f011_disk2_present_effective='1'
+                             and use_real_floppy2='0'
+                             and f011_disk2_write_protected_effective='1')) then
                     f011_rnf <= '1';
                     report "Drive 1 selected, but not mounted.";
                   elsif virtualise_f011_drive0='0' and f011_ds="000" and use_real_floppy0='1' then
@@ -2704,15 +2725,12 @@ begin  -- behavioural
                       sd_sector <= (others => '1');
                     end if;
 
-                    -- Check for writing to disk image vs virtualisation
-                    if ((virtualise_f011_drive0='0' and f011_ds="000") or (virtualise_f011_drive1='0' and f011_ds="001"))
-                        and
-                      ((use_real_floppy0='0' and f011_ds="000") or (use_real_floppy2='0' and f011_ds="001")) then
-                      f011_busy <= '1';
-                      f011_crc <= '0';
-                      f011_rnf <= '0';
-                      sd_state <= F011WriteSector;
-                    elsif (use_real_floppy0='0' or f011_ds/="000") and (use_real_floppy2='0' or f011_ds/="001") then
+                    -- The real-drive cases were handled above.  External
+                    -- virtualisation therefore selects the hypervisor
+                    -- unconditionally; otherwise this is an ordinary image
+                    -- write through the SD-card path.
+                    if (virtualise_f011_drive0='1' and f011_ds="000")
+                      or (virtualise_f011_drive1='1' and f011_ds="001") then
                       sd_state <= HyperTrapWrite;
                       if f011_ds="000" then
                         sd_sector(16 downto 0) <= diskimage1_offset;
@@ -2722,6 +2740,11 @@ begin  -- behavioural
                         sd_sector(16 downto 0) <= (others => '0');
                       end if;
                       sd_sector(31 downto 17) <= (others => '0');
+                    else
+                      f011_busy <= '1';
+                      f011_crc <= '0';
+                      f011_rnf <= '0';
+                      sd_state <= F011WriteSector;
                     end if;
                     sdio_error <= '0';
                     sdio_fsm_error <= '0';
