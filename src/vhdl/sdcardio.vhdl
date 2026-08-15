@@ -2611,26 +2611,25 @@ begin  -- behavioural
                       else
                         sd_sector <= diskimage2_sector + diskimage2_offset;
                       end if;
-                    end if;
-                    if (virtualise_f011_drive0='1' and f011_ds="000")
-                      or (virtualise_f011_drive1='1' and f011_ds="001")
-                    then
-                      -- Hypervisor virtualised
-                      sd_state <= HyperTrapRead;
-                      if f011_ds="000" then
-                        sd_sector(16 downto 0) <= diskimage1_offset;
-                      elsif f011_ds="001" then
-                        sd_sector(16 downto 0) <= diskimage2_offset;
+
+                      if (virtualise_f011_drive0='1' and f011_ds="000")
+                        or (virtualise_f011_drive1='1' and f011_ds="001")
+                      then
+                        -- Hypervisor virtualised
+                        sd_state <= HyperTrapRead;
+                        if f011_ds="000" then
+                          sd_sector(16 downto 0) <= diskimage1_offset;
+                        else
+                          sd_sector(16 downto 0) <= diskimage2_offset;
+                        end if;
+                        sd_sector(31 downto 17) <= (others => '0');
                       else
-                        sd_sector(16 downto 0) <= (others => '0');
+                        -- SD card
+                        sd_state <= ReadSector;
                       end if;
-                      sd_sector(31 downto 17) <= (others => '0');
-                    else
-                      -- SD card
-                      sd_state <= ReadSector;
+                      sdio_error <= '0';
+                      sdio_fsm_error <= '0';
                     end if;
-                    sdio_error <= '0';
-                    sdio_fsm_error <= '0';
                   end if;
 
                 when x"80" | x"84" =>         -- write sector

@@ -31,7 +31,13 @@ f011_virtual_read:
         sta $D67C
 
         jsr wait5usec
-        lda #$21
+        ;; Keep drive 0's legacy opcode unchanged, and encode drive 1 by
+        ;; incrementing it.  The old four-byte message had no drive identity,
+        ;; so a host could not safely virtualise both drives at once.
+        lda $d080
+        and #$07
+        clc
+        adc #$21
         sta $D67C
 
         ;; Wait for monitor_load to clear bit 7 of side register to indicate that
@@ -85,7 +91,11 @@ f011_virtual_write:
         sta $D67C
 
         jsr wait5usec
-        lda #$5C
+        ;; As above: $5C is drive 0, $5D is drive 1.
+        lda $d080
+        and #$07
+        clc
+        adc #$5C
         sta $D67C
 
 fvw1:   lda $d086
@@ -98,4 +108,3 @@ fvw1:   lda $d086
         ;; Return from hypervisor
         ;;
 fvw2:   sta hypervisor_enterexit_trigger
-
