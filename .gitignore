@@ -137,6 +137,7 @@ release-build/*.7z
 
 # py tests
 tests/vunit_out
+__pycache__/
 
 # hyppotest outputs
 FAIL.*
