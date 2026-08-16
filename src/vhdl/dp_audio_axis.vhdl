@@ -126,19 +126,6 @@ entity dp_audio_axis is
     m_axis_tready : in  std_logic
   );
 
-  -- Associate the generated module-reference clock with its AXI-stream bus.
-  -- Keep port attributes in the entity's scope: Vivado accepted them in the
-  -- architecture, but that placement is non-standard and GHDL rejects it.
-  attribute X_INTERFACE_INFO : string;
-  attribute X_INTERFACE_PARAMETER : string;
-  attribute X_INTERFACE_INFO of aud_clk_in : signal is
-    "xilinx.com:signal:clock:1.0 aud_clk_in CLK";
-  attribute X_INTERFACE_PARAMETER of aud_clk_in : signal is
-    "XIL_INTERFACENAME aud_clk_in, FREQ_HZ 24000000, PHASE 0.0";
-  attribute X_INTERFACE_INFO of aud_clk_out : signal is
-    "xilinx.com:signal:clock:1.0 aud_clk_out CLK";
-  attribute X_INTERFACE_PARAMETER of aud_clk_out : signal is
-    "XIL_INTERFACENAME aud_clk_out, ASSOCIATED_BUSIF M_AXIS, FREQ_HZ 24000000, PHASE 0.0";
 end dp_audio_axis;
 
 architecture rtl of dp_audio_axis is
@@ -249,6 +236,21 @@ architecture rtl of dp_audio_axis is
   signal tvalid_i : std_logic := '0';
   signal tdata_i  : std_logic_vector(31 downto 0) := (others => '0');
   signal tid_i    : std_logic := '0';
+
+  -- Vivado module-reference metadata.  Vivado requires these port attributes
+  -- in the architecture declarative region in order to create aud_clk_out as
+  -- a clock interface and associate M_AXIS with it.  Its entity-level parser
+  -- misreads the output-clock port map and emits BD 41-967 instead.
+  attribute X_INTERFACE_INFO : string;
+  attribute X_INTERFACE_PARAMETER : string;
+  attribute X_INTERFACE_INFO of aud_clk_in : signal is
+    "xilinx.com:signal:clock:1.0 aud_clk_in CLK";
+  attribute X_INTERFACE_PARAMETER of aud_clk_in : signal is
+    "XIL_INTERFACENAME aud_clk_in, FREQ_HZ 24000000, PHASE 0.0";
+  attribute X_INTERFACE_INFO of aud_clk_out : signal is
+    "xilinx.com:signal:clock:1.0 aud_clk_out CLK";
+  attribute X_INTERFACE_PARAMETER of aud_clk_out : signal is
+    "XIL_INTERFACENAME aud_clk_out, ASSOCIATED_BUSIF M_AXIS, FREQ_HZ 24000000, PHASE 0.0";
 
   attribute ASYNC_REG : string;
   attribute ASYNC_REG of aud_reset_pipe : signal is "TRUE";
