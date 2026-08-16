@@ -167,6 +167,11 @@ set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME 
 set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/div_reg_reg*}]
 set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/frames_reg* && IS_SEQUENTIAL == 1}]
 set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/stalls_reg* && IS_SEQUENTIAL == 1}]
+set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/fifo_overflows_reg* && IS_SEQUENTIAL == 1}]
+set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/capture_misses_reg* && IS_SEQUENTIAL == 1}]
+set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/fifo_level_reg* && IS_SEQUENTIAL == 1}]
+set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/fifo_highwater_reg* && IS_SEQUENTIAL == 1}]
+set_max_delay -datapath_only 10.000 -from [get_cells -quiet -hier -filter {NAME =~ *dpaud/inst/max_stall_run_reg* && IS_SEQUENTIAL == 1}]
 
 ## F011 control: same quasi-static crossing as the keyboard and audio blocks.
 ## Config bits are written by a human and then sit still, so bounding the

@@ -45,6 +45,13 @@
 --   0x08  R   MAGIC  0x4D363541 ("M65A") for probing
 --   0x0C  R   STAT   [15:0]  frames sent (wraps)
 --                    [31:16] beats the sink was not ready for (backpressure)
+--   0x10  R   DROPS  [15:0]  FIFO overflows (saturating)
+--                    [31:16] source captures missed (saturating)
+--   0x14  R   FIFO   [15:0]  current queued stereo frames
+--                    [31:16] maximum queued frames since reset
+--   0x18  R   STALL  [15:0]  longest consecutive backpressure run in clocks
+--                    [31:16] configured FIFO depth
+--   0x1C  R   CAP    0x41554631 ("AUF1": audio FIFO diagnostics v1)
 --
 -- CLOCKING -- and a mistake worth recording.
 --
@@ -71,6 +78,12 @@ library UNISIM;
 use UNISIM.vcomponents.all;
 
 entity dp_audio_axis is
+  generic (
+    -- 4096 stereo frames absorb more than 85 ms at 48 kHz.  The normal path
+    -- stays near empty, so this adds resilience without adding steady-state
+    -- latency.  A generic keeps the bounded simulation small and fast.
+    FIFO_DEPTH_G : positive := 4096
+  );
   port (
     -- AXI4-Lite control, on the interconnect's clock
     s_axi_aclk    : in  std_logic;
@@ -82,7 +95,7 @@ entity dp_audio_axis is
     aud_clk_in  : in  std_logic;
     aud_clk_out : out std_logic;
 
-    s_axi_awaddr  : in  std_logic_vector(3 downto 0);
+    s_axi_awaddr  : in  std_logic_vector(4 downto 0);
     s_axi_awvalid : in  std_logic;
     s_axi_awready : out std_logic;
     s_axi_wdata   : in  std_logic_vector(31 downto 0);
@@ -93,7 +106,7 @@ entity dp_audio_axis is
     s_axi_bvalid  : out std_logic;
     s_axi_bready  : in  std_logic;
 
-    s_axi_araddr  : in  std_logic_vector(3 downto 0);
+    s_axi_araddr  : in  std_logic_vector(4 downto 0);
     s_axi_arvalid : in  std_logic;
     s_axi_arready : out std_logic;
     s_axi_rdata   : out std_logic_vector(31 downto 0);
@@ -112,6 +125,20 @@ entity dp_audio_axis is
     m_axis_tvalid : out std_logic := '0';
     m_axis_tready : in  std_logic
   );
+
+  -- Associate the generated module-reference clock with its AXI-stream bus.
+  -- Keep port attributes in the entity's scope: Vivado accepted them in the
+  -- architecture, but that placement is non-standard and GHDL rejects it.
+  attribute X_INTERFACE_INFO : string;
+  attribute X_INTERFACE_PARAMETER : string;
+  attribute X_INTERFACE_INFO of aud_clk_in : signal is
+    "xilinx.com:signal:clock:1.0 aud_clk_in CLK";
+  attribute X_INTERFACE_PARAMETER of aud_clk_in : signal is
+    "XIL_INTERFACENAME aud_clk_in, FREQ_HZ 24000000, PHASE 0.0";
+  attribute X_INTERFACE_INFO of aud_clk_out : signal is
+    "xilinx.com:signal:clock:1.0 aud_clk_out CLK";
+  attribute X_INTERFACE_PARAMETER of aud_clk_out : signal is
+    "XIL_INTERFACENAME aud_clk_out, ASSOCIATED_BUSIF M_AXIS, FREQ_HZ 24000000, PHASE 0.0";
 end dp_audio_axis;
 
 architecture rtl of dp_audio_axis is
@@ -142,6 +169,16 @@ architecture rtl of dp_audio_axis is
   signal frames_sync : unsigned(15 downto 0) := (others => '0');
   signal stalls_meta : unsigned(15 downto 0) := (others => '0');
   signal stalls_sync : unsigned(15 downto 0) := (others => '0');
+  signal overflows_meta : unsigned(15 downto 0) := (others => '0');
+  signal overflows_sync : unsigned(15 downto 0) := (others => '0');
+  signal misses_meta : unsigned(15 downto 0) := (others => '0');
+  signal misses_sync : unsigned(15 downto 0) := (others => '0');
+  signal fifo_level_meta : unsigned(15 downto 0) := (others => '0');
+  signal fifo_level_sync : unsigned(15 downto 0) := (others => '0');
+  signal fifo_high_meta : unsigned(15 downto 0) := (others => '0');
+  signal fifo_high_sync : unsigned(15 downto 0) := (others => '0');
+  signal max_stall_meta : unsigned(15 downto 0) := (others => '0');
+  signal max_stall_sync : unsigned(15 downto 0) := (others => '0');
 
   signal ctrl_reg : std_logic_vector(7 downto 0) := (others => '0');
   signal div_reg  : unsigned(15 downto 0) := to_unsigned(DIV_DEFAULT, 16);
@@ -157,15 +194,16 @@ architecture rtl of dp_audio_axis is
   signal arready_i : std_logic := '0';
   signal rvalid_i  : std_logic := '0';
   signal rdata_i   : std_logic_vector(31 downto 0) := (others => '0');
-  signal wr_addr   : std_logic_vector(3 downto 0) := (others => '0');
+  signal wr_addr   : std_logic_vector(4 downto 0) := (others => '0');
   signal wr_data   : std_logic_vector(31 downto 0) := (others => '0');
   signal wr_strb   : std_logic_vector(3 downto 0) := (others => '0');
   signal aw_held   : std_logic := '0';
   signal w_held    : std_logic := '0';
 
-  -- Sample-rate strobe
+  -- Sample-rate divider.  Capture requests continue at exactly the configured
+  -- rate even while the sink applies backpressure; the FIFO decouples those
+  -- two events instead of silently skipping a sample.
   signal rate_cnt : unsigned(15 downto 0) := (others => '0');
-  signal frame_go : std_logic := '0';
 
   ------------------------------------------------------------------------------
   -- Clock crossing, destination-driven.
@@ -173,9 +211,8 @@ architecture rtl of dp_audio_axis is
   -- The stream side asks for a sample by toggling req; the core side sees the
   -- toggle, latches both channels at one instant (so left and right are always
   -- from the same moment) and toggles ack.  Between the ack and the next req
-  -- the captured pair is guaranteed not to move, so the stream side can read it
-  -- as ordinary stable data.  No FIFO needed: we consume exactly one sample per
-  -- frame and never need to buffer.
+  -- the captured pair is guaranteed not to move, so the stream side can write
+  -- it safely into the local FIFO.
   ------------------------------------------------------------------------------
   signal req_tog     : std_logic := '0';
   signal req_sync    : std_logic_vector(2 downto 0) := (others => '0');
@@ -183,32 +220,35 @@ architecture rtl of dp_audio_axis is
   signal ack_sync    : std_logic_vector(2 downto 0) := (others => '0');
   signal cap_l       : std_logic_vector(19 downto 0) := (others => '0');
   signal cap_r       : std_logic_vector(19 downto 0) := (others => '0');
-  signal hold_l      : std_logic_vector(19 downto 0) := (others => '0');
-  signal hold_r      : std_logic_vector(19 downto 0) := (others => '0');
+  signal capture_pending : std_logic := '0';
 
-  type   tx_state_t is (TX_IDLE, TX_FIRST, TX_SECOND);
+  -- Keep stereo atomic in one 40-bit memory.  The registered synchronous read
+  -- is deliberate: an asynchronous array read maps this buffer into hundreds
+  -- of LUTRAM primitives, while this simple-dual-port shape maps cleanly into
+  -- block RAM.  fifo_read_data holds the head frame throughout both AXI beats,
+  -- so a simultaneous write into a slot freed by the second beat is harmless.
+  type sample_mem_t is array (natural range <>) of
+    std_logic_vector(39 downto 0);
+  signal fifo_mem : sample_mem_t(0 to FIFO_DEPTH_G - 1);
+  signal fifo_read_data : std_logic_vector(39 downto 0) := (others => '0');
+  signal fifo_wr_ptr : natural range 0 to FIFO_DEPTH_G - 1 := 0;
+  signal fifo_rd_ptr : natural range 0 to FIFO_DEPTH_G - 1 := 0;
+  signal fifo_level : natural range 0 to FIFO_DEPTH_G := 0;
+  signal fifo_highwater : natural range 0 to FIFO_DEPTH_G := 0;
+
+  type   tx_state_t is (TX_IDLE, TX_FETCH, TX_FIRST, TX_SECOND);
   signal tx_state : tx_state_t := TX_IDLE;
 
   signal frames  : unsigned(15 downto 0) := (others => '0');
   signal stalls  : unsigned(15 downto 0) := (others => '0');
+  signal fifo_overflows : unsigned(15 downto 0) := (others => '0');
+  signal capture_misses : unsigned(15 downto 0) := (others => '0');
+  signal stall_run : unsigned(15 downto 0) := (others => '0');
+  signal max_stall_run : unsigned(15 downto 0) := (others => '0');
 
   signal tvalid_i : std_logic := '0';
   signal tdata_i  : std_logic_vector(31 downto 0) := (others => '0');
   signal tid_i    : std_logic := '0';
-
-  -- Tell Vivado which generated module-reference clock owns the AXIS bus.  A
-  -- name-inferred interface alone does not associate aud_clk_out with M_AXIS,
-  -- which produced BD 41-967 and left its frequency at a bogus 100 MHz.
-  attribute X_INTERFACE_INFO : string;
-  attribute X_INTERFACE_PARAMETER : string;
-  attribute X_INTERFACE_INFO of aud_clk_in : signal is
-    "xilinx.com:signal:clock:1.0 aud_clk_in CLK";
-  attribute X_INTERFACE_PARAMETER of aud_clk_in : signal is
-    "XIL_INTERFACENAME aud_clk_in, FREQ_HZ 24000000, PHASE 0.0";
-  attribute X_INTERFACE_INFO of aud_clk_out : signal is
-    "xilinx.com:signal:clock:1.0 aud_clk_out CLK";
-  attribute X_INTERFACE_PARAMETER of aud_clk_out : signal is
-    "XIL_INTERFACENAME aud_clk_out, ASSOCIATED_BUSIF M_AXIS, FREQ_HZ 24000000, PHASE 0.0";
 
   attribute ASYNC_REG : string;
   attribute ASYNC_REG of aud_reset_pipe : signal is "TRUE";
@@ -222,6 +262,19 @@ architecture rtl of dp_audio_axis is
   attribute ASYNC_REG of frames_sync : signal is "TRUE";
   attribute ASYNC_REG of stalls_meta : signal is "TRUE";
   attribute ASYNC_REG of stalls_sync : signal is "TRUE";
+  attribute ASYNC_REG of overflows_meta : signal is "TRUE";
+  attribute ASYNC_REG of overflows_sync : signal is "TRUE";
+  attribute ASYNC_REG of misses_meta : signal is "TRUE";
+  attribute ASYNC_REG of misses_sync : signal is "TRUE";
+  attribute ASYNC_REG of fifo_level_meta : signal is "TRUE";
+  attribute ASYNC_REG of fifo_level_sync : signal is "TRUE";
+  attribute ASYNC_REG of fifo_high_meta : signal is "TRUE";
+  attribute ASYNC_REG of fifo_high_sync : signal is "TRUE";
+  attribute ASYNC_REG of max_stall_meta : signal is "TRUE";
+  attribute ASYNC_REG of max_stall_sync : signal is "TRUE";
+
+  attribute ram_style : string;
+  attribute ram_style of fifo_mem : signal is "block";
 
   -- Sign-extend the 20-bit sample to 32 bits and slide it to wherever the sink
   -- expects it to sit.
@@ -238,6 +291,10 @@ architecture rtl of dp_audio_axis is
   end function;
 
 begin
+
+  assert FIFO_DEPTH_G <= 65535
+    report "dp_audio_axis FIFO_DEPTH_G exceeds diagnostic register width"
+    severity failure;
 
   s_axi_awready <= awready_i;
   s_axi_wready  <= wready_i;
@@ -293,6 +350,16 @@ begin
     if rising_edge(s_axi_aclk) then
       frames_meta <= frames;  frames_sync <= frames_meta;
       stalls_meta <= stalls;  stalls_sync <= stalls_meta;
+      overflows_meta <= fifo_overflows;
+      overflows_sync <= overflows_meta;
+      misses_meta <= capture_misses;
+      misses_sync <= misses_meta;
+      fifo_level_meta <= to_unsigned(fifo_level, fifo_level_meta'length);
+      fifo_level_sync <= fifo_level_meta;
+      fifo_high_meta <= to_unsigned(fifo_highwater, fifo_high_meta'length);
+      fifo_high_sync <= fifo_high_meta;
+      max_stall_meta <= max_stall_run;
+      max_stall_sync <= max_stall_meta;
     end if;
   end process;
 
@@ -315,67 +382,157 @@ begin
   -- Stream clock domain: rate strobe, handshake, and the AXI4-Stream master.
   ------------------------------------------------------------------------------
   process (aud_clk)
+    variable rate_tick_v : boolean;
+    variable ack_event_v : boolean;
+    variable push_v : boolean;
+    variable pop_v : boolean;
+    variable next_level_v : natural range 0 to FIFO_DEPTH_G;
+    variable next_stall_v : unsigned(15 downto 0);
   begin
     if rising_edge(aud_clk) then
       if aud_resetn = '0' then
         rate_cnt <= (others => '0');
-        frame_go <= '0';
         tx_state <= TX_IDLE;
         tvalid_i <= '0';
         req_tog  <= '0';
-        frames   <= (others => '0');
-        stalls   <= (others => '0');
+        capture_pending <= '0';
+        fifo_wr_ptr <= 0;
+        fifo_rd_ptr <= 0;
+        fifo_level <= 0;
+        fifo_highwater <= 0;
+        frames <= (others => '0');
+        stalls <= (others => '0');
+        fifo_overflows <= (others => '0');
+        capture_misses <= (others => '0');
+        stall_run <= (others => '0');
+        max_stall_run <= (others => '0');
       else
-        -- sample rate strobe
-        frame_go <= '0';
-        if rate_cnt >= div_aud then
-          rate_cnt <= (others => '0');
-          frame_go <= '1';
-        else
-          rate_cnt <= rate_cnt + 1;
-        end if;
+        rate_tick_v := false;
+        ack_event_v := ack_sync(2) /= ack_sync(1);
+        push_v := false;
+        pop_v := false;
 
         ack_sync <= ack_sync(1 downto 0) & ack_tog;
-        if ack_sync(2) /= ack_sync(1) then
-          -- capture complete; the pair is stable until we ask again
-          hold_l <= cap_l;
-          hold_r <= cap_r;
-        end if;
-
-        case tx_state is
-          when TX_IDLE =>
-            tvalid_i <= '0';
-            if frame_go = '1' and en_bit = '1' then
-              req_tog  <= not req_tog;      -- ask the core for the next pair
-              tdata_i  <= place(hold_l, shift_amt, mute_bit);
-              tid_i    <= swap_bit;         -- swap_bit=0 => left is tid 0
-              tvalid_i <= '1';
-              tx_state <= TX_FIRST;
-            end if;
-
-          when TX_FIRST =>
-            if m_axis_tready = '1' then
-              tdata_i  <= place(hold_r, shift_amt, mute_bit);
-              tid_i    <= not swap_bit;
-              tvalid_i <= '1';
-              tx_state <= TX_SECOND;
-            else
-              stalls <= stalls + 1;
-            end if;
-
-          when TX_SECOND =>
-            if m_axis_tready = '1' then
-              tvalid_i <= '0';
-              frames   <= frames + 1;
-              tx_state <= TX_IDLE;
-            else
-              stalls <= stalls + 1;
-            end if;
-        end case;
 
         if en_bit = '0' then
+          -- Disabling is also a clean stream boundary: discard queued samples
+          -- and any capture that was in flight, but retain diagnostics so a
+          -- fault cannot be hidden by an off/on recovery.
+          rate_cnt <= (others => '0');
+          capture_pending <= '0';
+          fifo_wr_ptr <= 0;
+          fifo_rd_ptr <= 0;
+          fifo_level <= 0;
           tvalid_i <= '0';
           tx_state <= TX_IDLE;
+          stall_run <= (others => '0');
+        else
+          if rate_cnt >= div_aud then
+            rate_cnt <= (others => '0');
+            rate_tick_v := true;
+          else
+            rate_cnt <= rate_cnt + 1;
+          end if;
+
+          -- Consume the FIFO independently of sample capture.  Backpressure
+          -- holds each AXI beat stable; once ready returns, queued frames drain
+          -- as quickly as the sink permits without losing their order.
+          case tx_state is
+            when TX_IDLE =>
+              tvalid_i <= '0';
+              if fifo_level > 0 then
+                -- Synchronous BRAM read.  The data is available in
+                -- fifo_read_data on the next audio clock.
+                fifo_read_data <= fifo_mem(fifo_rd_ptr);
+                tx_state <= TX_FETCH;
+              end if;
+
+            when TX_FETCH =>
+                tdata_i <= place(fifo_read_data(39 downto 20),
+                                  shift_amt, mute_bit);
+                tid_i <= swap_bit;
+                tvalid_i <= '1';
+                tx_state <= TX_FIRST;
+
+            when TX_FIRST =>
+              if m_axis_tready = '1' then
+                tdata_i <= place(fifo_read_data(19 downto 0),
+                                  shift_amt, mute_bit);
+                tid_i <= not swap_bit;
+                tvalid_i <= '1';
+                tx_state <= TX_SECOND;
+              end if;
+
+            when TX_SECOND =>
+              if m_axis_tready = '1' then
+                tvalid_i <= '0';
+                frames <= frames + 1;
+                tx_state <= TX_IDLE;
+                pop_v := true;
+              end if;
+          end case;
+
+          if tvalid_i = '1' and m_axis_tready = '0' then
+            stalls <= stalls + 1;
+            if stall_run /= x"FFFF" then
+              next_stall_v := stall_run + 1;
+              stall_run <= next_stall_v;
+              if next_stall_v > max_stall_run then
+                max_stall_run <= next_stall_v;
+              end if;
+            end if;
+          else
+            stall_run <= (others => '0');
+          end if;
+
+          -- The capture bus is stable before the synchronized acknowledgement
+          -- arrives.  A simultaneous FIFO pop makes room for this push even
+          -- when the queue was full at the start of the clock.
+          if ack_event_v then
+            capture_pending <= '0';
+            if fifo_level < FIFO_DEPTH_G or pop_v then
+              fifo_mem(fifo_wr_ptr) <= cap_l & cap_r;
+              if fifo_wr_ptr = FIFO_DEPTH_G - 1 then
+                fifo_wr_ptr <= 0;
+              else
+                fifo_wr_ptr <= fifo_wr_ptr + 1;
+              end if;
+              push_v := true;
+            elsif fifo_overflows /= x"FFFF" then
+              fifo_overflows <= fifo_overflows + 1;
+            end if;
+          end if;
+
+          -- Ask for one coherent source sample on every exact 48 kHz tick.
+          -- The normal round trip is only a few clocks; if it ever spans a
+          -- complete sample period, record the missed capture explicitly.
+          if rate_tick_v then
+            if capture_pending = '0' or ack_event_v then
+              req_tog <= not req_tog;
+              capture_pending <= '1';
+            elsif capture_misses /= x"FFFF" then
+              capture_misses <= capture_misses + 1;
+            end if;
+          end if;
+
+          if pop_v then
+            if fifo_rd_ptr = FIFO_DEPTH_G - 1 then
+              fifo_rd_ptr <= 0;
+            else
+              fifo_rd_ptr <= fifo_rd_ptr + 1;
+            end if;
+          end if;
+
+          next_level_v := fifo_level;
+          if push_v and not pop_v then
+            next_level_v := next_level_v + 1;
+          elsif pop_v and not push_v then
+            next_level_v := next_level_v - 1;
+          end if;
+          fifo_level <= next_level_v;
+          if next_level_v > fifo_highwater then
+            fifo_highwater <= next_level_v;
+          end if;
         end if;
       end if;
     end if;
@@ -412,12 +569,12 @@ begin
             bvalid_i <= '0';
           end if;
         elsif aw_held = '1' and w_held = '1' then
-          case wr_addr(3 downto 2) is
-            when "00" =>
+          case wr_addr(4 downto 2) is
+            when "000" =>
               if wr_strb(0) = '1' then
                 ctrl_reg <= wr_data(7 downto 0);
               end if;
-            when "01" =>
+            when "001" =>
               if wr_strb(0) = '1' then
                 div_reg(7 downto 0) <= unsigned(wr_data(7 downto 0));
               end if;
@@ -436,12 +593,21 @@ begin
             rvalid_i <= '0';
           end if;
         elsif arready_i = '1' and s_axi_arvalid = '1' then
-          case s_axi_araddr(3 downto 2) is
-            when "00"   => rdata_i <= x"000000" & ctrl_reg;
-            when "01"   => rdata_i <= x"0000" & std_logic_vector(div_reg);
-            when "10"   => rdata_i <= x"4D363541";                  -- "M65A"
-            when others => rdata_i <= std_logic_vector(stalls_sync) &
+          case s_axi_araddr(4 downto 2) is
+            when "000" => rdata_i <= x"000000" & ctrl_reg;
+            when "001" => rdata_i <= x"0000" & std_logic_vector(div_reg);
+            when "010" => rdata_i <= x"4D363541";                  -- "M65A"
+            when "011" => rdata_i <= std_logic_vector(stalls_sync) &
                                       std_logic_vector(frames_sync);
+            when "100" => rdata_i <= std_logic_vector(misses_sync) &
+                                      std_logic_vector(overflows_sync);
+            when "101" => rdata_i <= std_logic_vector(fifo_high_sync) &
+                                      std_logic_vector(fifo_level_sync);
+            when "110" => rdata_i <=
+                std_logic_vector(to_unsigned(FIFO_DEPTH_G, 16)) &
+                std_logic_vector(max_stall_sync);
+            when "111" => rdata_i <= x"41554631";                 -- "AUF1"
+            when others => rdata_i <= (others => '0');
           end case;
           rvalid_i <= '1';
         end if;
