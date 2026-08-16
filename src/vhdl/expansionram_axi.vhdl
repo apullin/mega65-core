@@ -45,7 +45,7 @@ use ieee.numeric_std.all;
 entity expansionram_axi is
   generic (
     -- Where the 8 MB window sits in PS DDR.  Must match the reserved-memory
-    -- node Linux is given (see tools/user-override.dtb and HANDOVER.md).
+    -- node Linux is given (see the KV260 outer repo's IMPLEMENTATION.md).
     --
     -- Deliberately NOT 0x70000000: U-Boot loads user-override.dtb to exactly
     -- that address, and marking it no-map is asking the kernel to treat the
