@@ -219,6 +219,35 @@ begin
         dest_out => ntsc_dec_coarse_74
     );
 
+  cdcpal0 : xpm_cdc_single
+    port map (
+        src_in => pal_inc_fine,
+        src_clk => clock27,
+        dest_clk => clock74p22,
+        dest_out => pal_inc_fine_74
+    );
+  cdcpal1 : xpm_cdc_single
+    port map (
+        src_in => pal_dec_fine,
+        src_clk => clock27,
+        dest_clk => clock74p22,
+        dest_out => pal_dec_fine_74
+    );
+  cdcpal2 : xpm_cdc_single
+    port map (
+        src_in => pal_inc_coarse,
+        src_clk => clock27,
+        dest_clk => clock74p22,
+        dest_out => pal_inc_coarse_74
+    );
+  cdcpal3 : xpm_cdc_single
+    port map (
+        src_in => pal_dec_coarse,
+        src_clk => clock27,
+        dest_clk => clock74p22,
+        dest_out => pal_dec_coarse_74
+    );
+
   xpm_cdc_single_inst0 : xpm_cdc_single
     port map (
         src_in => pal50_select,
@@ -380,8 +409,8 @@ begin
           pal_coarse <= pal_coarse + 1;
         end if;
       end if;
-      if pal_dec_coarse_74 /= pal_dec_coarse_74 then
-        pal_dec_coarse_74 <= pal_dec_coarse_74;
+      if pal_dec_coarse_74 /= last_pal_dec_coarse_74 then
+        last_pal_dec_coarse_74 <= pal_dec_coarse_74;
         if pal_coarse > 0 then
           pal_coarse <= pal_coarse - 1;
         end if;
