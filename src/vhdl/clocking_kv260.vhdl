@@ -77,11 +77,20 @@ architecture RTL of clocking_kv260 is
   signal clk_fb_adjust0 : std_logic := '0';
   signal clk_fb         : std_logic := '0';
   signal clock10125mhz  : std_logic := '0';
+  signal clock27_unbuffered : std_logic := '0';
+  signal clock74p22_unbuffered : std_logic := '0';
 
   signal locked_stage1  : std_logic := '0';
   signal locked_stage2  : std_logic := '0';
   signal locked_720p    : std_logic := '0';
   signal clk_fb_720p    : std_logic := '0';
+
+  -- The downstream display mux deliberately consumes these global-buffer
+  -- outputs.  Prevent clock optimization from bypassing either buffer and
+  -- recreating an illegal cross-region MMCM-to-BUFGCTRL connection.
+  attribute dont_touch : string;
+  attribute dont_touch of clock27_buf : label is "true";
+  attribute dont_touch of clock74p22_buf : label is "true";
 
 begin
 
@@ -188,7 +197,7 @@ begin
       CLKOUT2   => clock81p,
       CLKOUT2B  => clock81n,
       CLKOUT3   => clock41,
-      CLKOUT4   => clock27,
+      CLKOUT4   => clock27_unbuffered,
       LOCKED    => locked_stage2,
 
       CLKFBIN   => clk_fb,
@@ -237,7 +246,7 @@ begin
     )
     port map (
       CLKFBOUT  => clk_fb_720p,
-      CLKOUT0   => clock74p22,
+      CLKOUT0   => clock74p22_unbuffered,
       LOCKED    => locked_720p,
 
       CLKFBIN   => clk_fb_720p,
@@ -260,6 +269,18 @@ begin
       PWRDWN    => '0',
       RST       => '0'
     );
+
+  -- Explicit source buffers serve both the core logic and the downstream
+  -- DisplayPort BUFGCTRL.  A BUFG-to-BUFGCTRL cascade is legal across clock
+  -- regions; connecting two MMCMs directly to one BUFGCTRL is not, because
+  -- both direct inputs would have to originate in that buffer's one region.
+  clock27_buf : BUFGCE
+    generic map (SIM_DEVICE => "ULTRASCALE_PLUS")
+    port map (I => clock27_unbuffered, CE => '1', O => clock27);
+
+  clock74p22_buf : BUFGCE
+    generic map (SIM_DEVICE => "ULTRASCALE_PLUS")
+    port map (I => clock74p22_unbuffered, CE => '1', O => clock74p22);
 
   locked <= locked_stage1 and locked_stage2 and locked_720p;
 

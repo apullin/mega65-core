@@ -301,14 +301,28 @@ begin
 
   -- The PS live-video clock must switch with the synchronized pixel stream.
   -- A fabric LUT mux can emit a runt pulse when $D053.5 changes and wedge the
-  -- DisplayPort live-input state machine.  BUFGMUX_CTRL waits for a safe edge
-  -- when moving between the unrelated native and 720p clocks.
-  dp_clock_mux : BUFGMUX_CTRL
+  -- DisplayPort live-input state machine.  Both sources are already on global
+  -- clock networks, allowing this second-stage BUFGCTRL to sit independently
+  -- of the two MMCM regions.  This legal cascade also adds the same small,
+  -- deterministic clock delay in both modes.
+  dp_clock_mux : BUFGCTRL
+    generic map (
+      INIT_OUT        => 0,
+      IS_S0_INVERTED  => '1',
+      PRESELECT_I0    => true,
+      PRESELECT_I1    => false,
+      SIM_DEVICE      => "ULTRASCALE_PLUS"
+    )
     port map (
-      I0 => clock27,
-      I1 => clock74p22,
-      S  => upscale_active,
-      O  => dp_video_clock
+      I0      => clock27,
+      I1      => clock74p22,
+      S0      => upscale_active,
+      S1      => upscale_active,
+      CE0     => '1',
+      CE1     => '1',
+      IGNORE0 => '0',
+      IGNORE1 => '0',
+      O       => dp_video_clock
     );
 
   -- Slow device manager.
