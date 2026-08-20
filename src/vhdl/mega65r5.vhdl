@@ -665,7 +665,8 @@ begin
       blue_out => up_blue,
       hsync_out => up_vga_hsync,
       vsync_out => up_vsync,
-      pixelvalid_out => up_datavalid
+      pixelvalid_out => up_datavalid,
+      upscale_active => open
 
       );
 

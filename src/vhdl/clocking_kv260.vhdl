@@ -14,6 +14,10 @@
 --   1215 / 30  =  40.5  MHz   (cpuclock)
 --   1215 / 45  =  27    MHz   (true pixel clock / video timing)
 --
+-- A separate MMCM makes 74.226 MHz directly from pl_clk0 for the core's
+-- existing 720p upscaler: 99.999 MHz x 9 / 12.125.  Keeping it separate avoids
+-- perturbing the timing-closed 27/40.5/81/162 MHz core clock set.
+--
 -- All land within 0.001% of nominal (27 MHz comes out as 26.99973 MHz).
 --
 -- WHY THE STAGE-2 MULTIPLIER IS 12 AND NOT 8
@@ -62,6 +66,7 @@ entity clocking_kv260 is
     clock135p : out std_logic;
     clock135n : out std_logic;
     clock162  : out std_logic;
+    clock74p22 : out std_logic;
 
     locked    : out std_logic
   );
@@ -75,6 +80,8 @@ architecture RTL of clocking_kv260 is
 
   signal locked_stage1  : std_logic := '0';
   signal locked_stage2  : std_logic := '0';
+  signal locked_720p    : std_logic := '0';
+  signal clk_fb_720p    : std_logic := '0';
 
 begin
 
@@ -205,6 +212,55 @@ begin
       RST       => '0'
     );
 
-  locked <= locked_stage1 and locked_stage2;
+  -- Independent 720p pixel clock.  The historical upscaler was tuned around
+  -- 74.2268 MHz, so preserve that frequency rather than silently changing its
+  -- PAL/NTSC frame-lock compensation to nominal 74.250 MHz.
+  mmcm_720p : MMCME4_ADV
+    generic map (
+      BANDWIDTH            => "OPTIMIZED",
+      CLKOUT4_CASCADE      => "FALSE",
+      COMPENSATION         => "AUTO",
+      STARTUP_WAIT         => "FALSE",
+
+      CLKIN1_PERIOD        => 10.000,
+      DIVCLK_DIVIDE        => 1,
+      CLKFBOUT_MULT_F      => 9.000,
+      CLKFBOUT_PHASE       => 0.000,
+      CLKFBOUT_USE_FINE_PS => "FALSE",
+
+      CLKOUT0_DIVIDE_F     => 12.125,
+      CLKOUT0_PHASE        => 0.000,
+      CLKOUT0_DUTY_CYCLE   => 0.500,
+      CLKOUT0_USE_FINE_PS  => "FALSE",
+
+      REF_JITTER1          => 0.010
+    )
+    port map (
+      CLKFBOUT  => clk_fb_720p,
+      CLKOUT0   => clock74p22,
+      LOCKED    => locked_720p,
+
+      CLKFBIN   => clk_fb_720p,
+      CLKIN1    => clk_in,
+      CLKIN2    => '0',
+      CLKINSEL  => '1',
+
+      DADDR     => (others => '0'),
+      DCLK      => '0',
+      DEN       => '0',
+      DI        => (others => '0'),
+      DWE       => '0',
+
+      PSCLK     => '0',
+      PSEN      => '0',
+      PSINCDEC  => '0',
+
+      CDDCREQ   => '0',
+
+      PWRDWN    => '0',
+      RST       => '0'
+    );
+
+  locked <= locked_stage1 and locked_stage2 and locked_720p;
 
 end RTL;

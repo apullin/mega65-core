@@ -10,6 +10,15 @@ library unisim;
 use unisim.vcomponents.all;
 
 entity upscaler is
+  generic (
+    -- The original 720p path copies 720 source pixels into the middle of the
+    -- 1280-pixel output.  That preserves samples but not the 4:3 display
+    -- aspect once a square-pixel television presents the 720p mode.  Targets
+    -- without a downstream aspect-ratio stage can request a sharp 4:3 box:
+    -- 720 source samples become 960 output samples (4:3 nearest-neighbour),
+    -- leaving deterministic 160-pixel black shoulders.
+    pillarbox_4_3 : boolean := false
+    );
   port (
     -- Input and output pixel clocks
     clock27 : in std_logic;
@@ -49,12 +58,46 @@ entity upscaler is
     green_out : out unsigned(7 downto 0);
     blue_out : out unsigned(7 downto 0);
     hsync_out : out std_logic;
-    vsync_out : out std_logic
+    vsync_out : out std_logic;
+
+    -- Synchronized, frame-boundary-qualified enable.  A target that switches
+    -- its exported pixel clock must use this rather than the asynchronous
+    -- register bit so clock and pixels change together.
+    upscale_active : out std_logic := '0'
 
     );
 end entity;
 
 architecture hundertwasser of upscaler is
+
+  function active_left return integer is
+  begin
+    if pillarbox_4_3 then
+      return 160;
+    end if;
+    return 280;
+  end function;
+
+  function active_width return integer is
+  begin
+    if pillarbox_4_3 then
+      return 960;
+    end if;
+    return 720;
+  end function;
+
+  function source_x(output_x : integer) return natural is
+    variable relative_x : natural range 0 to 959;
+  begin
+    relative_x := output_x - active_left;
+    if pillarbox_4_3 then
+      -- floor(x * 3 / 4): repeat one source pixel in every group of four
+      -- output pixels.  Constant arithmetic synthesizes without a divider and
+      -- deliberately keeps hard pixel edges sharper than interpolation.
+      return relative_x - ((relative_x + 3) / 4);
+    end if;
+    return natural(relative_x);
+  end function;
 
   signal write_en : std_logic_vector(3 downto 0) := "0000";
   signal write_addr : unsigned(9 downto 0);
@@ -665,7 +708,7 @@ begin
           end if;
         end if;
       end if;
-      if x_count < 280 then
+      if x_count < active_left then
         -- Left shoulder
         red_up <= (others => '0');
         green_up <= (others => '0');
@@ -676,10 +719,10 @@ begin
         read_addr <= (others => (others => '1'));
         read_addr(target_raster) <= to_unsigned(0,10);
         read_addr((target_raster + 1) mod 4) <= to_unsigned(0,10);
-      elsif (x_count < 1000) and (y_count < 720) then
+      elsif (x_count < (active_left + active_width)) and (y_count < 720) then
         -- Work out which X position we need to read from the raster buffers
-        read_addr(target_raster) <= to_unsigned(x_count - ((1280 - 720)/2),10);
-        read_addr((target_raster +1) mod 4) <= to_unsigned(x_count - ((1280 - 720)/2),10);
+        read_addr(target_raster) <= to_unsigned(source_x(x_count),10);
+        read_addr((target_raster +1) mod 4) <= to_unsigned(source_x(x_count),10);
         -- Active pixel: Do mix of the rasters
         red_up <= to_unsigned(to_integer(rdata_buf0(7 downto 0)) * coeff0,16)(15 downto 8)
                   + to_unsigned(to_integer(rdata_buf1(7 downto 0)) * coeff1,16)(15 downto 8)
@@ -729,8 +772,8 @@ begin
     if upscale_en_int='1' then hsync_out <= hsync_up; else hsync_out <= hsync_in; end if;
     if upscale_en_int='1' then vsync_out <= vsync_up; else vsync_out <= vsync_in; end if;
     if upscale_en_int='1' then pixelvalid_out <= pixelvalid_up; else pixelvalid_out <= pixelvalid_in; end if;
+    upscale_active <= upscale_en_int;
 
   end process;
 
 end hundertwasser;
-

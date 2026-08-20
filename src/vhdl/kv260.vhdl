@@ -162,6 +162,7 @@ architecture Behavioral of container is
   signal clock135p            : std_logic;
   signal clock135n            : std_logic;
   signal clock162             : std_logic;
+  signal clock74p22           : std_logic;
   signal clocks_locked        : std_logic;
   signal sector_buffer_mapped : std_logic;
 
@@ -197,6 +198,16 @@ architecture Behavioral of container is
   signal v_green         : unsigned(7 downto 0);
   signal v_blue          : unsigned(7 downto 0);
   signal hdmi_dataenable : std_logic;
+  signal pal50_select     : std_logic;
+  signal upscale_enable   : std_logic;
+  signal upscale_active   : std_logic;
+  signal up_hsync         : std_logic;
+  signal up_vsync         : std_logic;
+  signal up_red           : unsigned(7 downto 0);
+  signal up_green         : unsigned(7 downto 0);
+  signal up_blue          : unsigned(7 downto 0);
+  signal up_dataenable    : std_logic;
+  signal dp_video_clock   : std_logic;
 
   -- QSPI flash: not reachable from the PL on this board.  The core still
   -- drives these, so they are terminated locally.
@@ -246,7 +257,58 @@ begin
       clock135p => clock135p,
       clock135n => clock135n,
       clock162  => clock162,
+      clock74p22 => clock74p22,
       locked    => clocks_locked
+    );
+
+  -- The VIC-IV already exposes its standard frame-boundary-controlled 720p
+  -- upscaler bit at $D053.5.  Real MEGA65 targets instantiate this block; the
+  -- original KV260 port simply omitted it.  Keep native PAL/NTSC as the bypass
+  -- path and add a square-pixel 4:3 picture inside 1280x720 when enabled.
+  upscaler0 : entity work.upscaler
+    generic map (
+      pillarbox_4_3 => true
+    )
+    port map (
+      clock27 => clock27,
+      clock74p22 => clock74p22,
+      hold_image => '0',
+      ntsc_inc_fine => '0',
+      ntsc_dec_fine => '0',
+      ntsc_inc_coarse => '0',
+      ntsc_dec_coarse => '0',
+      pal_inc_fine => '0',
+      pal_dec_fine => '0',
+      pal_inc_coarse => '0',
+      pal_dec_coarse => '0',
+      pal50_select => pal50_select,
+      upscale_en => upscale_enable,
+      vlock_en => '1',
+      pixelvalid_in => hdmi_dataenable,
+      red_in => v_red,
+      green_in => v_green,
+      blue_in => v_blue,
+      hsync_in => v_hdmi_hsync,
+      vsync_in => v_vsync,
+      pixelvalid_out => up_dataenable,
+      red_out => up_red,
+      green_out => up_green,
+      blue_out => up_blue,
+      hsync_out => up_hsync,
+      vsync_out => up_vsync,
+      upscale_active => upscale_active
+    );
+
+  -- The PS live-video clock must switch with the synchronized pixel stream.
+  -- A fabric LUT mux can emit a runt pulse when $D053.5 changes and wedge the
+  -- DisplayPort live-input state machine.  BUFGMUX_CTRL waits for a safe edge
+  -- when moving between the unrelated native and 720p clocks.
+  dp_clock_mux : BUFGMUX_CTRL
+    port map (
+      I0 => clock27,
+      I1 => clock74p22,
+      S  => upscale_active,
+      O  => dp_video_clock
     );
 
   -- Slow device manager.
@@ -375,6 +437,8 @@ begin
       clock200             => '0',
       clock27              => clock27,
       clock50mhz           => '0',
+      pal50_select_out     => pal50_select,
+      upscale_enable       => upscale_enable,
       no_hyppo             => '0',
       kbd_datestamp        => (others => '0'),
       kbd_commit           => (others => '0'),
@@ -530,10 +594,10 @@ begin
   audio_left  <= audio_left_i;
   audio_right <= audio_right_i;
 
-  dp_video_in_clk        <= clock27;
-  dp_live_video_in_hsync <= v_hdmi_hsync;
-  dp_live_video_in_vsync <= v_vsync;
-  dp_live_video_in_de    <= hdmi_dataenable;
+  dp_video_in_clk        <= dp_video_clock;
+  dp_live_video_in_hsync <= up_hsync;
+  dp_live_video_in_vsync <= up_vsync;
+  dp_live_video_in_de    <= up_dataenable;
 
   -- The live-video bus carries three 12-bit components.  The VIC-IV produces
   -- 8 bits per component, so each is left-aligned into its 12-bit field with
@@ -545,9 +609,9 @@ begin
   -- swapped on hardware, this single assignment is the only thing to change --
   -- a colour-bar test settles it in seconds.  Do not trust it until it has
   -- been seen on a monitor.
-  dp_live_video_in_pixel1(35 downto 24) <= std_logic_vector(v_red)   & "0000";
-  dp_live_video_in_pixel1(23 downto 12) <= std_logic_vector(v_green) & "0000";
-  dp_live_video_in_pixel1(11 downto  0) <= std_logic_vector(v_blue)  & "0000";
+  dp_live_video_in_pixel1(35 downto 24) <= std_logic_vector(up_red)   & "0000";
+  dp_live_video_in_pixel1(23 downto 12) <= std_logic_vector(up_green) & "0000";
+  dp_live_video_in_pixel1(11 downto  0) <= std_logic_vector(up_blue)  & "0000";
 
   -- Keyboard port B charge control (as per the wukong target).
   process (portb_pins, portb_charge_pins) is
